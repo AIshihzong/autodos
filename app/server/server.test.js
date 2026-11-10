@@ -715,7 +715,7 @@ test('base branch: work starts from and lands on the project base, on a branch n
   await waitFor(async () => (await phaseOf(t.number)) === 'review', 20000);
   const x = await todoOf(t.number);
   assert.equal(x.ref, 'AP-7', 'the reference is read from the title');
-  assert.equal(x.branch, 'crew/ap-7/ap-7-add-the-b-file');
+  assert.equal(x.branch, 'crew/ap-7/add-the-b-file');
   assert.equal(x.base, 'crew/main');
   assert.match(x.diff, /b\.txt/);
   assert.deepEqual(x.files, ['b.txt']);
@@ -726,6 +726,16 @@ test('base branch: work starts from and lands on the project base, on a branch n
   assert.ok(!fs.existsSync(path.join(repo, 'b.txt')), 'the main checkout, on another branch, was not touched');
   assert.equal(sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main');
   assert.equal(sh(repo, 'log', '-1', '--format=%s', 'crew/main'), `Merge #${t.number}: AP-7 Add the b file`);
+});
+
+test('branch names: the template fills in number, reference and an ASCII slug, and stays tidy without one', async () => {
+  const { branchName } = await import('./git.js');
+  assert.equal(branchName('', { number: 5, title: 'Fix login' }), 'autodos/todo-5');
+  assert.equal(branchName('crew/{ref}-{slug}', { number: 5, title: 'Fix the login page!' }), 'crew/todo-5-fix-the-login-page');
+  assert.equal(branchName('crew/{ref}-{slug}', { number: 5, title: '[AP-041] Preserve summaries', ref: 'AP-041' }), 'crew/ap-041-preserve-summaries');
+  assert.equal(branchName('crew/{ref}-{slug}', { number: 5, title: 'AP-041 保留摘要', ref: 'AP-041' }), 'crew/ap-041');
+  assert.equal(branchName('crew/{ref}-{slug}', { number: 5, title: '修复登录页' }), 'crew/todo-5');
+  assert.equal(branchName('work/{number}/{slug}', { number: 5, title: '修复登录页' }), 'work/5');
 });
 
 test('setup: a failing setup command stops the todo and says why', async () => {

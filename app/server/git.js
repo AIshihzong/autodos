@@ -57,21 +57,19 @@ const REF = /^\[?([A-Za-z][A-Za-z0-9]*-\d+(?:-\d+)*)\]?(?=[\s:：.，,)]|$)/;
 /** A reference like AP-041 or [BUG-12] at the start of a title, or ''. */
 export const refOf = (title) => String(title || '').trim().match(REF)?.[1] || '';
 
-/** The branch name for a todo, from the project's template. {number}, {slug} and {ref} are filled in. */
+/**
+ * The branch name for a todo, from the project's template. {number} is the todo number, {ref} its reference
+ * (todo-N when it has none), {slug} its title in ASCII without the reference. A title with nothing to slug
+ * (Chinese, say) drops {slug} together with the separator in front of it, so names stay tidy.
+ */
 export function branchName(template, t) {
-  const slug =
-    String(t.title || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 40)
-      .replace(/-+$/, '') || `todo-${t.number}`;
-  const ref =
-    String(t.ref || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9._-]+/g, '-')
-      .replace(/^[-.]+|[-.]+$/g, '') || `todo-${t.number}`;
-  return String(template || '').trim().replace(/\{number\}/g, t.number).replace(/\{slug\}/g, slug).replace(/\{ref\}/g, ref) || `autodos/todo-${t.number}`;
+  const clean = (x, max) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, max).replace(/-+$/, '');
+  const given = String(t.ref || '').trim();
+  const ref = given.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '') || `todo-${t.number}`;
+  const title = String(t.title || '').trim();
+  const slug = clean(given && title.toLowerCase().startsWith(given.toLowerCase()) ? title.slice(given.length) : title.replace(/^\[[^\]]*\]/, ''), 40);
+  const tpl = String(template || '').trim() || 'autodos/todo-{number}';
+  return (slug ? tpl : tpl.replace(/[-_.]?\{slug\}/g, '')).replace(/\{number\}/g, t.number).replace(/\{slug\}/g, slug).replace(/\{ref\}/g, ref).replace(/\/+$/, '') || `autodos/todo-${t.number}`;
 }
 
 /** Where a branch is checked out (the main checkout or a worktree), or '' when nowhere. */

@@ -449,7 +449,8 @@ export class Runner extends EventEmitter {
     const files = t.files;
     if (!Array.isArray(files)) return 'its change set could not be read';
     if ((t.autoAccepted || 0) >= AUTO_ACCEPT_LIMIT) return `it already came back from the merge queue ${AUTO_ACCEPT_LIMIT} times`;
-    if (!files.length) return ''; // nothing changed: nothing to land, nothing to look at
+    // Nothing changed: nothing to land. For an item from the backlog that means the work was not done, which the person should see.
+    if (!files.length) return t.backlogKey ? 'the agent changed nothing for this backlog item' : '';
     const commands = (project.checks || []).filter(Boolean);
     if (!commands.length || s.verify === false) return 'this project has no checks to vouch for the change';
     if (!t.checks?.passed) return 'its checks are failing';
