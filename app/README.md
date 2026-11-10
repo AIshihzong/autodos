@@ -60,7 +60,7 @@ Webhooks need a public address (a tunnel such as `cloudflared` to this Mac). `/h
 
 ## Merge queue
 
-Done on a todo with a branch puts it in its project's merge queue (phase *Merging*). One at a time, Autodos merges the latest base branch into the todo branch in its worktree, re-runs the project checks on the combined code, and only then merges it into the base. A conflict goes back to the author agent with instructions to merge and resolve it (Settings: on by default), then returns to Review; failing checks go straight back to Review. Say "ship it" to queue everything in Review.
+Done on a todo with a branch puts it in its project's merge queue (phase *Merging*). One at a time, Autodos merges the latest base branch into the todo branch in its worktree, re-runs the project checks on the combined code, and only then merges it into the base. A conflict goes back to the author agent with instructions to merge and resolve it (Settings: on by default), then returns to Review; failing checks go straight back to Review (in an unattended project, back to the author agent). Say "ship it" to queue everything in Review.
 
 ## Other machines
 
@@ -78,7 +78,7 @@ Usage → Weekly retro shows the last 7 days: done and created todos, rework rat
 
 ## Pull requests, previews, sub-tasks
 
-- **Pull requests** (Projects → *project* → Settings → When done: *Open a pull request*): Done pushes the todo branch and opens a PR with your logged-in `gh`. Every minute Autodos reads the PR: failing CI checks, reviews and comments go back to the same todo as outside events (data, never instructions), the agent fixes them, and the branch is pushed again. Merged on GitHub → Done; closed → Closed.
+- **Pull requests** (Projects → *project* → Settings → When done: *Open a pull request*): Done pushes the todo branch and opens a PR with your logged-in `gh`. Every minute Autodos reads the PR: failing CI checks (with the end of the failing job's log; a cancelled run is not a failure), reviews and comments go back to the same todo as outside events (data, never instructions), the agent fixes them, and the branch is pushed again. The PR targets the project's base branch; a title template (`prTitle` in `autodos.json`, e.g. `[{ref}] {title}`) is optional. Merged on GitHub → Done; closed → Closed.
 - **Preview** (same Settings, *Preview*, e.g. `npm run dev -- --port {port}`; *Detect* suggests one): the todo's drawer gets a Preview button that starts the dev server in the todo's own worktree on a free port and opens it. At most three run at once; they stop when the todo lands or closes.
 - **Sub-tasks**: an agent that calls the MCP tool `create_todo` while working on a todo creates a sub-task under it (Autodos passes the todo number to the agent's MCP server). Sub-tasks are limited in depth and number (Settings) and spend from the parent's budget, so delegation can't fan out without bound.
 
@@ -95,11 +95,49 @@ Settings → Machines → **Pair a machine** gives a one-time code (10 minutes).
 
 ## Projects and git
 
-Add a folder under **Projects**. If it is a git repository, each todo gets branch `autodos/todo-N` in its own worktree, each finished turn is committed there, Review shows the diff stat, and **Done** merges it into the branch your main checkout is on (or **Done without merging** leaves it on the branch). Plain folders are edited in place.
+Add a folder under **Projects**. If it is a git repository, each todo gets its own branch and worktree, each finished turn is committed there, Review shows the diff stat, and **Done** merges it into the project's base (or **Done without merging** leaves it on the branch). Plain folders are edited in place.
+
+Per project (Projects → the project → Settings):
+
+- **Base branch**: where work starts from and lands. Blank means whatever the project folder has checked out. A base nobody has checked out is moved directly (compare-and-swap on the ref), so the project folder can stay on another branch, or detached, and is never touched.
+- **Branch names**: a template such as `crew/{ref}-{slug}`. `{number}` is the todo number, `{slug}` comes from the title, `{ref}` is the todo's reference (`AP-041` at the start of a title is picked up by itself). Default `autodos/todo-{number}`.
+- **Setup command**: runs once in each new worktree, on the hub and on worker machines (`pnpm install --frozen-lockfile`, copying an env file…). If it fails, the todo fails and says why.
+- **Push the base branch to origin after each merge**: for a base that other machines or GitHub should see. Never forced; if origin has commits this machine lacks, they are merged in first.
+
+## Unattended projects
+
+A project can keep itself moving while you are away. Everything below is off until you turn it on for that project.
+
+- **Accept changes by itself**: a change whose checks passed and whose AI review left no open finding merges without waiting at Review. It still waits for you when the project has no checks, the checks fail, the review did not run or could not read the whole diff, the change is larger than the limit you set, or it touches a **protected path** (`deploy/*`, `.github/workflows/*`, `*.env`, one pattern per line; `autodos.json` is always protected). Each of those leaves a line saying why. If checks fail later, on top of the latest base, the change goes back to its author agent instead of to you; after three rounds it waits for you.
+- **Backlog file**: a Markdown checklist in the repository, read from the base branch. Each unchecked `- [ ] item` becomes a todo (indented lines under it are its description), a few at a time, each item only once; the agent ticks the item in the same change. Agents add follow-up work to the file instead of widening their change, so the file is the queue.
+- **Upstream repository**: for a fork. On a timer Autodos fetches the upstream branch and merges it into the base in a scratch worktree, runs the setup command and the checks there, and lands it only when clean and green. A conflict or a red result becomes a todo for an agent. The upstream remote's push address is disabled; nothing is ever pushed to it.
+- **Rules** take an *open todos at most* limit, so a nightly rule waits while its previous run is still unfinished.
+
+These settings can live in the repository as `autodos.json`, so a fresh machine needs one click (**Load autodos.json**) or `POST /api/projects/<id>/load-config`:
+
+```json
+{
+  "baseBranch": "crew/main",
+  "branchTemplate": "crew/{ref}-{slug}",
+  "setup": "npm ci",
+  "checks": ["npm run typecheck", "npm test"],
+  "pushBase": true,
+  "autopilot": { "accept": true, "maxFiles": 40 },
+  "protectedPaths": ["deploy/*", ".github/workflows/*", "*.env"],
+  "backlog": { "file": "docs/BACKLOG.md", "maxOpen": 2 },
+  "upstream": { "url": "https://github.com/owner/repo", "branch": "main", "every": 60, "mirror": true },
+  "memory": { "decisions": ["Never deploy from here"], "declined": [] },
+  "rules": [{ "name": "Nightly sweep", "cron": "0 3 * * *", "title": "Nightly sweep", "prompt": "Find one flaky test and fix it.", "maxOpen": 1 }]
+}
+```
+
+The file is applied only when you load it. When it changes on the base branch the project shows that it is out of date, and nothing changes until you load it again: the file decides what runs on your machine and what may land without you, so an agent's edit to it must not take effect by itself.
+
+For an unattended project, set the agents' permission mode so they can run commands (Settings), give it a budget per todo, and leave the project folder alone: use a base branch that is not checked out there.
 
 ## Agents and runtimes
 
-Each agent has a name, a role (used by the Lead to assign work), a runtime (`Claude Code`, `Codex`, `Demo`, or the default) and an optional model. Claude Code runs with `--permission-mode acceptEdits` by default; switch to `bypassPermissions` in Settings if agents need to run commands unattended. A Claude session is resumed on every revision, so replies keep their context.
+Each agent has a name, a role (used by the Lead to assign work), a runtime (`Claude Code`, `Codex`, `Demo`, or the default) and an optional model. Claude Code runs with `--permission-mode acceptEdits` by default; switch to `bypassPermissions` in Settings if agents need to run commands unattended. Codex runs in its `workspace-write` sandbox by default (no network, `.git` read-only); *Codex sandbox* in Settings can open the network or remove the sandbox, which a project needs when its agents install dependencies or finish a `git merge` themselves. A Claude session is resumed on every revision, so replies keep their context.
 
 ## MCP
 
@@ -118,7 +156,7 @@ The server binds to `127.0.0.1` only, and refuses write requests that come from 
 ## Layout
 
 ```
-server/   Node HTTP API, SSE events, todo lifecycle (runner.js), Lead (chief.js), runtimes, git worktrees
+server/   Node HTTP API, SSE events, todo lifecycle (runner.js), Lead (chief.js), runtimes, git worktrees, unattended projects (autopilot.js)
 web/      React + Vite UI (board, Lead chat, todo drawer, ⌘K palette, agents, projects, schedules, usage, settings; EN/中文; light/dark)
 src-tauri/  Tauri shell: starts or reuses the server, folder picker, notifications, dock badge, outside links
 mcp/      stdio MCP server

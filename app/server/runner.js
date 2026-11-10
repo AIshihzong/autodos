@@ -5,8 +5,8 @@ import { EventEmitter } from 'node:events';
 import { id, now } from './store.js';
 import { runtimes, resolveRuntime, detectRuntimes } from './runtimes.js';
 import { prepareEvidence, collectEvidence } from './evidence.js';
-import { runChecks, fixPrompt, reviewPrompt, parseReview, reviewFixPrompt, memoryBlock, changedFiles, autoFixable } from './quality.js';
-import { ensureWorktree, commitAll, mergeBranch, removeWorktree, diffStat, diffText, git } from './git.js';
+import { runCheck, runChecks, fixPrompt, reviewPrompt, parseReview, reviewFixPrompt, memoryBlock, changedFiles, autoFixable, protectedHits, REVIEW_LIMIT } from './quality.js';
+import { ensureWorktree, commitAll, landBranch, removeWorktree, diffStat, diffText, diffFiles, diffTruncated, baseOf, baseRef, branchName, isGitRepo, git } from './git.js';
 
 export const PHASES = ['todo', 'queued', 'planning', 'confirm', 'building', 'asking', 'review', 'merging', 'shipping', 'done', 'failed', 'closed'];
 
@@ -20,6 +20,8 @@ export function parseAsk(text) {
   return { text: q.join(' ') || 'The agent needs your decision.', options, before: text.slice(0, m.index).trim() };
 }
 export const ACTIVE = new Set(['planning', 'building']);
+/** How often one todo may be accepted without the person before it has to wait for them. */
+const AUTO_ACCEPT_LIMIT = 3;
 
 export class Runner extends EventEmitter {
   constructor(store) {
@@ -41,6 +43,7 @@ export class Runner extends EventEmitter {
           delete t.remoteJob;
         } else if (ACTIVE.has(t.phase)) t.phase = 'queued';
         delete t.completing;
+        delete t.autoAccepting;
       }
     });
     setImmediate(() => this.pump());
@@ -222,13 +225,14 @@ export class Runner extends EventEmitter {
     if (!project || !t.worktree || !fs.existsSync(t.worktree)) return this.#mergeBack(t, 'The todo has no worktree to merge');
     const who = ['-c', 'user.name=Autodos', '-c', 'user.email=autodos@localhost'];
     await commitAll(t.worktree, `#${t.number} ${t.title}`);
-    const base = await git(project.path, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    // It lands where it started from, even if the main checkout has moved to another branch since.
+    const base = t.base || (await baseOf(project.path, project));
     const commands = (project.checks || []).filter(Boolean);
     const stillQueued = () => t.phase === 'merging'; // stop/close while merging cancels the merge
     // Repeat if the base moves while we check, so what lands is always what was checked.
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!stillQueued()) return;
-      const baseSha = await git(project.path, ['rev-parse', 'HEAD']);
+      const baseSha = await git(project.path, ['rev-parse', baseRef(base)]);
       // 1. Bring the latest base into the todo branch, in the todo's own worktree.
       try {
         await git(t.worktree, [...who, 'merge', '--no-edit', baseSha]);
@@ -243,18 +247,44 @@ export class Runner extends EventEmitter {
         const results = await runChecks(t.worktree, commands, {});
         t.stage = null;
         t.checks = { results, passed: results.every((r) => r.ok), fixes: 0, at: now(), onBase: baseSha };
-        if (!t.checks.passed) return this.#mergeBack(t, `Checks fail on top of the latest ${base}: ${results.filter((r) => !r.ok).map((r) => r.command).join(', ')}`);
+        if (!t.checks.passed) return this.#mergeBack(t, `Checks fail on top of the latest ${base}: ${results.filter((r) => !r.ok).map((r) => r.command).join(', ')}`, { failed: results, base });
       }
       if (!stillQueued()) return;
-      if ((await git(project.path, ['rev-parse', 'HEAD'])) !== baseSha) continue; // base moved: re-merge and re-check
-      // 3. Land it: a fast clean merge of exactly what was checked.
-      await mergeBranch(project.path, t.branch, `Merge #${t.number}: ${t.title}`);
+      // 3. Land it: a fast clean merge of exactly what was checked. Nothing else may move the base meanwhile.
+      const landed = await this.landing(project.id, async () => {
+        if ((await git(project.path, ['rev-parse', baseRef(base)])) !== baseSha) return false;
+        await landBranch(project.path, base, t.branch, `Merge #${t.number}: ${t.title}`, baseSha);
+        return true;
+      });
+      if (!landed) continue; // base moved: re-merge and re-check
       t.mergeLanded = base;
       this.store.flush(); // remember it landed before cleaning up, in case we stop right here
       this.addMessage(t, 'system', `Merged ${t.branch} into ${base}${commands.length && s.verify !== false ? ' after the checks passed on the latest code' : ''}.`);
+      await this.pushBase(project, base).catch((e) => this.addMessage(t, 'system', `It is merged here, but pushing ${base} to origin failed: ${e.message}`, { error: true }));
       return this.#finishMerge(t, project, base);
     }
     return this.#mergeBack(t, `${base} kept moving while the checks ran; try Done again`);
+  }
+
+  #locks = new Map();
+
+  /** One at a time per project for anything that moves its base branch (the merge queue, upstream sync). */
+  landing(projectId, fn) {
+    const run = (this.#locks.get(projectId) || Promise.resolve()).then(fn, fn);
+    this.#locks.set(projectId, run.catch(() => {}));
+    return run;
+  }
+
+  /** Projects that share their base (project.pushBase) publish it after every landing. Never forced. */
+  async pushBase(project, base) {
+    if (!project.pushBase || !base || base === 'HEAD') return;
+    const push = () => git(project.path, ['push', '--quiet', 'origin', `refs/heads/${base}:refs/heads/${base}`]);
+    // Refused because origin has commits we don't: take them in first, then try once more.
+    await push().catch(async (e) => {
+      if (!this.autopilot) throw e;
+      await this.autopilot.pull(project);
+      await push();
+    });
   }
 
   async #finishMerge(t, project, base) {
@@ -265,10 +295,19 @@ export class Runner extends EventEmitter {
     this.store.changed();
   }
 
-  #mergeBack(t, reason, { conflict = false, base = '' } = {}) {
+  #mergeBack(t, reason, { conflict = false, base = '', failed = null } = {}) {
     t.stage = null;
     const s = this.store.data.settings;
-    if (conflict && s.mergeAutoResolve !== false) {
+    const unattended = !!this.store.project(t.projectId)?.autopilot?.accept && (t.autoAccepted || 0) < AUTO_ACCEPT_LIMIT;
+    if (failed && unattended) {
+      // Accepted without the person, so nobody is waiting at Review to read this: the author fixes it on the latest base.
+      this.addMessage(t, 'system', `${reason}. Sent back to the agent to fix on top of the latest ${base || 'base'}.`, { error: true });
+      this.addMessage(t, 'system', `The latest base is now merged into this worktree and the project checks fail on the combined code.\n\n${fixPrompt(failed)}`, { pending: true, hidden: true });
+      t.revision = 'build';
+      this.renewBudget(t);
+      this.setPhase(t, 'queued');
+      this.pump();
+    } else if (conflict && s.mergeAutoResolve !== false) {
       // Hand the conflict to the author: it merges the base itself, resolves, and comes back to Review.
       this.addMessage(t, 'system', `${reason}. Sent back to the agent to merge ${base} and resolve the conflicts.`, { error: true });
       this.addMessage(t, 'system', `Before this can land, run \`git merge ${base}\` in this worktree, resolve every conflict keeping the intent of both sides, make sure no conflict markers remain, and commit. Then summarize how you resolved them.`, { pending: true, hidden: true });
@@ -320,7 +359,7 @@ export class Runner extends EventEmitter {
       if (ctrl.signal.aborted) throw new Error('Stopped');
     };
     try {
-      const cwd = await this.#workdir(t);
+      const cwd = await this.#workdir(t, ctrl);
       prepareEvidence(cwd);
       stopped();
       this.#armBudget(t, ctrl);
@@ -346,8 +385,9 @@ export class Runner extends EventEmitter {
         if (t.worktree && project) {
           // Commit each finished turn on the todo's branch so Review shows the real change set.
           await commitAll(t.worktree, `#${t.number} ${t.title}`).catch(() => {});
-          t.diffStat = await diffStat(project.path, t.branch).catch(() => '');
-          t.diff = await diffText(project.path, t.branch).catch(() => '');
+          t.diffStat = await diffStat(project.path, t.branch, t.base).catch(() => '');
+          t.diff = await diffText(project.path, t.branch, { base: t.base }).catch(() => '');
+          t.files = await diffFiles(project.path, t.branch, t.base).then((f) => f.slice(0, 2000), () => null);
         }
         stopped();
         if (t.pr && t.prFeedback && this.delivery && t.pr.state !== 'MERGED') {
@@ -359,7 +399,12 @@ export class Runner extends EventEmitter {
               this.setPhase(t, 'review');
             },
           );
-        } else this.setPhase(t, 'review');
+        } else {
+          const stay = this.#autopilot(t, project);
+          if (stay === '') t.autoAccepting = true; // accepted below, once this turn has let go of the todo
+          else if (stay) this.addMessage(t, 'system', `Left at Review for you: ${stay}.`, { kind: 'autopilot' });
+          this.setPhase(t, 'review');
+        }
       }
     } catch (e) {
       t.live = '';
@@ -387,9 +432,69 @@ export class Runner extends EventEmitter {
       if (this.running.get(t.id) === ctrl) this.running.delete(t.id);
       // A reply sent while a stopped turn was still shutting down: run it now that the todo is free.
       if (t.phase === 'todo' && t.messages.some((m) => m.pending) && d.settings.autoStart) this.setPhase(t, 'queued');
+      if (t.autoAccepting) this.#accept(t);
       this.store.changed();
       this.pump();
     }
+  }
+
+  /**
+   * Unattended projects (project.autopilot.accept): '' when a finished change may land without the person,
+   * a reason when it has to wait for them, null when the project is not unattended.
+   */
+  #autopilot(t, project) {
+    const ap = project?.autopilot;
+    if (!ap?.accept || !t.worktree) return null;
+    const s = this.store.data.settings;
+    const files = t.files;
+    if (!Array.isArray(files)) return 'its change set could not be read';
+    if ((t.autoAccepted || 0) >= AUTO_ACCEPT_LIMIT) return `it already came back from the merge queue ${AUTO_ACCEPT_LIMIT} times`;
+    if (!files.length) return ''; // nothing changed: nothing to land, nothing to look at
+    const commands = (project.checks || []).filter(Boolean);
+    if (!commands.length || s.verify === false) return 'this project has no checks to vouch for the change';
+    if (!t.checks?.passed) return 'its checks are failing';
+    if (ap.review !== false) {
+      if (!t.review) return 'the AI review did not run';
+      const open = t.review.findings.filter((f) => f.severity !== 'low').length;
+      if (open) return `the review has ${open} open finding${open > 1 ? 's' : ''}`;
+      if (t.review.partial) return 'the change is too large for the reviewer to have read all of it';
+    }
+    const max = Number(ap.maxFiles) || 0;
+    if (max && files.length > max) return `it changes ${files.length} files (the limit for unattended changes is ${max})`;
+    const hits = protectedHits(files, project.protectedPaths);
+    if (hits.length) return `it touches protected files (${hits.slice(0, 5).join(', ')}${hits.length > 5 ? ', …' : ''})`;
+    return '';
+  }
+
+  /** Accept a change the autopilot cleared: the same path as the person clicking Done. */
+  #accept(t) {
+    if (t.phase !== 'review') return void delete t.autoAccepting; // stopped or moved in the meantime
+    t.autoAccepted = (t.autoAccepted || 0) + 1;
+    const nothing = !(t.files || []).length;
+    this.addMessage(t, 'system', nothing ? 'Nothing was changed, so there is nothing to merge. Closed without waiting for you.' : 'Checks passed and the review left nothing to decide, so this was accepted without waiting for you.', { kind: 'autopilot' });
+    const done = nothing ? this.#discard(t) : this.complete(t);
+    done
+      .catch((e) => this.addMessage(t, 'system', `Could not accept it automatically: ${e.message}. It waits at Review for you.`, { error: true, kind: 'autopilot' }))
+      .finally(() => {
+        const failed = t.phase === 'review';
+        delete t.autoAccepting;
+        if (failed) this.emit('phase', t, 'review'); // now it does need the person: tell them
+        this.store.changed();
+      });
+  }
+
+  /** A todo that changed nothing: drop its empty worktree and branch. */
+  async #discard(t) {
+    const project = this.store.project(t.projectId);
+    if (project && t.worktree) {
+      // Deleting a branch is final, so look once more: nothing committed beyond the base, nothing left uncommitted.
+      const ahead = await diffFiles(project.path, t.branch, t.base);
+      const dirty = await git(t.worktree, ['status', '--porcelain']);
+      if (ahead.length || dirty) throw new Error('the worktree still holds changes');
+      await removeWorktree(project.path, t.worktree, t.branch, true);
+    }
+    t.worktree = null;
+    this.setPhase(t, 'done');
   }
 
   /** One call to an agent runtime: streams output, records usage, enforces the budget afterwards. */
@@ -448,7 +553,7 @@ export class Runner extends EventEmitter {
     if (!project || !t.worktree) throw new Error('Remote machines work on git projects only: add the project as a git repository with worktrees on.');
     const repo = await git(project.path, ['remote', 'get-url', 'origin']).catch(() => '');
     if (!repo) throw new Error(`Remote machines need a shared git remote: add one to ${project.path} as "origin".`);
-    const base = await git(project.path, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    const base = t.base || (await baseOf(project.path, project));
     await commitAll(t.worktree, `#${t.number} ${t.title}`).catch(() => {});
     // If the remote branch has commits we don't (a worker finished after we lost track of it), take them first.
     const remoteSha = (await git(t.worktree, ['ls-remote', 'origin', `refs/heads/${t.branch}`]).catch(() => '')).split(/\s+/)[0] || '';
@@ -465,7 +570,7 @@ export class Runner extends EventEmitter {
     this.store.flush();
     const res = await this.workers.run(
       machine,
-      { todo: t.number, title: t.title, runtimeId, kind, prompt, model: model || '', sessionId: fresh ? null : sameMachineSession, repo, branch: t.branch, base, startSha: pushedSha, env: kind === 'review' ? null : { AUTODOS_TODO: String(t.number), AUTODOS_URL: (this.store.data.settings.publicUrl || this.hubUrl || '').replace(/\/$/, '') }, settings: { claudePermissionMode: this.store.data.settings.claudePermissionMode } },
+      { todo: t.number, title: t.title, runtimeId, kind, prompt, model: model || '', sessionId: fresh ? null : sameMachineSession, repo, branch: t.branch, base, setup: project.setup || '', startSha: pushedSha, env: kind === 'review' ? null : { AUTODOS_TODO: String(t.number), AUTODOS_URL: (this.store.data.settings.publicUrl || this.hubUrl || '').replace(/\/$/, '') }, settings: { claudePermissionMode: this.store.data.settings.claudePermissionMode, codexSandbox: this.store.data.settings.codexSandbox } },
       {
         signal: ctrl.signal,
         onText: (chunk) => {
@@ -571,7 +676,7 @@ export class Runner extends EventEmitter {
       let diff = '';
       if (t.worktree && project) {
         await commitAll(t.worktree, `#${t.number} ${t.title}`).catch(() => {});
-        diff = await diffText(project.path, t.branch).catch(() => '');
+        diff = await diffText(project.path, t.branch, { base: t.base, limit: REVIEW_LIMIT }).catch(() => '');
       }
       if (!diff && reviewer !== 'demo') {
         this.addMessage(t, 'system', 'Skipped the AI review: there is no git diff to review (no project, a plain folder, or no changes).', { kind: 'review' });
@@ -589,14 +694,15 @@ export class Runner extends EventEmitter {
           if (s.verify !== false && commands.length) await verify(1);
           // Review the result again, so what you see describes the final code, not the first draft.
           await commitAll(t.worktree, `#${t.number} ${t.title} (review fixes)`).catch(() => {});
-          const diff2 = await diffText(project.path, t.branch).catch(() => diff);
+          const diff2 = await diffText(project.path, t.branch, { base: t.base, limit: REVIEW_LIMIT }).catch(() => diff);
+          diff = diff2;
           stage('reviewing');
           const again = await this.#agentTurn(t, { agent, runtimeId: reviewer, kind: 'review', prompt: reviewPrompt(t, diff2), cwd, ctrl, fresh: true, label: `reviewer:${reviewer}` });
           const second = parseReview(again.text) || { summary: again.text.slice(0, 600), findings: [] };
           attempted = auto.map((f) => ({ ...f, attempted: true, resolved: !second.findings.some((g) => g.file === f.file && g.title === f.title) }));
           parsed = second;
         }
-        t.review = { reviewer, summary: parsed.summary, findings: parsed.findings, attempted, at: now() };
+        t.review = { reviewer, summary: parsed.summary, findings: parsed.findings, attempted, at: now(), ...(diffTruncated(diff) ? { partial: true } : {}) };
         const open = parsed.findings.filter((f) => f.severity !== 'low').length;
         this.addMessage(
           t,
@@ -609,27 +715,45 @@ export class Runner extends EventEmitter {
     t.stage = null;
   }
 
-  async #workdir(t) {
+  async #workdir(t, ctrl) {
     const d = this.store.data;
     const project = this.store.project(t.projectId);
     if (project && fs.existsSync(project.path)) {
       if (d.settings.useWorktrees) {
-        if (t.worktree && fs.existsSync(t.worktree)) return t.worktree;
-        // A failure here stops the todo: falling back to the main checkout would let parallel todos collide there.
-        const wt = await ensureWorktree(project.path, path.join(this.store.dir, 'worktrees', project.id), t.number).catch((e) => {
-          throw new Error(`Could not create a worktree for this todo: ${e.message}. Fix it, or turn off worktrees in Settings to edit the project folder directly.`);
-        });
-        if (wt) {
+        if (!(t.worktree && fs.existsSync(t.worktree))) {
+          if (!(await isGitRepo(project.path))) return project.path; // a plain folder: work in it directly
+          // A failure here stops the todo: falling back to the main checkout would let parallel todos collide there.
+          const fail = (e) => {
+            throw new Error(`Could not create a worktree for this todo: ${e.message}. Fix it, or turn off worktrees in Settings to edit the project folder directly.`);
+          };
+          const base = t.base || (await baseOf(project.path, project).catch(fail));
+          const name = t.branch || branchName(project.branchTemplate, t);
+          const wt = await ensureWorktree(project.path, path.join(this.store.dir, 'worktrees', project.id), t.number, { branch: name, base, own: !!t.branch }).catch(fail);
+          if (!wt) return project.path;
           t.worktree = wt.dir;
           t.branch = wt.branch;
-          return wt.dir;
+          if (base !== 'HEAD') t.base = base;
+          if (wt.created) delete t.setupDone;
         }
+        await this.#setup(t, project, ctrl);
+        return t.worktree;
       }
       return project.path;
     }
     const scratch = path.join(this.store.dir, 'scratch', `todo-${t.number}`);
     fs.mkdirSync(scratch, { recursive: true });
     return scratch;
+  }
+
+  /** The project's setup command (install dependencies, copy an env file…) runs once in each new worktree. */
+  async #setup(t, project, ctrl) {
+    const command = String(project.setup || '').trim();
+    if (!command || t.setupDone === command) return;
+    t.stage = 'setup';
+    this.store.changed();
+    const r = await runCheck(t.worktree, command, { signal: ctrl?.signal, timeoutMs: 30 * 60_000 }).finally(() => (t.stage = null));
+    if (!r.ok) throw new Error(`The project's setup command failed in the new worktree (exit ${r.code}):\n$ ${command}\n${r.output.slice(-2000)}`);
+    t.setupDone = command;
   }
 
   /** Follow-up prompts (fix rounds): a resumed Claude session remembers the task; other runtimes get it restated. */

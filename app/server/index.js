@@ -19,6 +19,7 @@ import { retroStats } from './retro.js';
 import { Previews, detectPreview } from './preview.js';
 import { Delivery } from './github.js';
 import { serveEvidence } from './evidence.js';
+import { Autopilot } from './autopilot.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(here, '..', 'dist');
@@ -60,6 +61,7 @@ export function createApp({ dataDir } = {}) {
   // A preview shows the code under review; once it lands, closes or changes hands, it goes away.
   runner.on('phase', (t) => ['done', 'closed', 'merging', 'shipping'].includes(t.phase) && previews.stop(t.id));
   runner.workers = workers;
+  const autopilot = new Autopilot(store, runner, rules, newTodo);
   attachChannels(store, runner);
 
   const snapshot = () => {
@@ -193,6 +195,14 @@ export function createApp({ dataDir } = {}) {
       store.changed();
       return project.memory;
     }
+    if (res === 'projects' && rid && method === 'POST' && ['sync', 'pull', 'backlog', 'load-config'].includes(sub)) {
+      const project = store.project(rid);
+      if (!project) throw new HttpError(404, 'No such project');
+      if (!project.path || !fs.existsSync(project.path)) throw new HttpError(400, 'The project folder does not exist');
+      if (sub === 'load-config') return autopilot.loadConfig(project);
+      if (sub === 'backlog') return { filed: (await autopilot.backlog(project)).map((t) => t.number), left: project.backlog?.left ?? null, error: project.backlog?.lastError || null };
+      return sub === 'sync' ? autopilot.sync(project) : autopilot.pull(project);
+    }
     if (res === 'projects' && rid && method === 'GET') {
       const project = store.project(rid);
       if (!project) throw new HttpError(404, 'No such project');
@@ -265,7 +275,7 @@ export function createApp({ dataDir } = {}) {
       const t = getTodo(rid);
       if (method === 'GET' && !sub) return t;
       if (method === 'PATCH' && !sub) {
-        for (const k of ['title', 'description', 'labels', 'agentId', 'projectId', 'mode']) if (k in body) t[k] = body[k];
+        for (const k of ['title', 'description', 'labels', 'agentId', 'projectId', 'mode', 'ref']) if (k in body) t[k] = body[k];
         t.updatedAt = now();
         store.changed();
         return t;
@@ -343,7 +353,9 @@ export function createApp({ dataDir } = {}) {
     if (res === 'rules' && rid && method === 'POST' && sub === 'run') {
       const r = store.data.rules.find((x) => x.id === rid);
       if (!r) throw new HttpError(404, 'No such rule');
-      return rules.fire(r);
+      const t = rules.fire(r);
+      if (!t) throw new HttpError(409, `This rule already has ${r.maxOpen} open todo${r.maxOpen > 1 ? 's' : ''}; it runs again when one is done or closed`);
+      return t;
     }
     if (res === 'rules' && (method === 'POST' || method === 'PATCH') && !sub) {
       const cur = rid ? store.data.rules.find((x) => x.id === rid) : {};
@@ -647,11 +659,12 @@ export function createApp({ dataDir } = {}) {
   server.on('close', () => {
     previews.stopAll();
     delivery.close();
+    autopilot.close();
     workers.close();
     rules.close();
     store.flush();
   });
-  return { server, store, runner, chief, feishu, delivery, previews, workers };
+  return { server, store, runner, chief, feishu, delivery, previews, workers, rules, autopilot };
 }
 
 export function startServer({ port = Number(process.env.PORT) || 4747, host = '127.0.0.1', dataDir } = {}) {

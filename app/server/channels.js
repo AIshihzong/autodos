@@ -103,6 +103,7 @@ export function attachChannels(store, runner) {
   };
   runner.on('phase', (t) => {
     if (t.tell === 'never') return;
+    if (t.phase === 'review' && t.autoAccepting) return; // accepted without the person: nothing for them to do
     const msg = text(t);
     if (!msg) return;
     for (const ch of store.data.channels || []) {

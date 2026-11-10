@@ -143,6 +143,7 @@ export class Rules {
     if (rule.when?.cron) parseCron(rule.when.cron); // throws on a bad expression
     if (rule.when?.every && !(Number(rule.when.every) >= 1)) throw new Error('Interval must be at least 1 minute');
     if (!rule.when?.cron && !rule.when?.every && !rule.when?.source) throw new Error('A rule needs a time (cron or interval) or an event source');
+    if (rule.maxOpen !== undefined) rule.maxOpen = Math.max(0, Math.min(50, Math.floor(Number(rule.maxOpen) || 0)));
     rule.nextAt = nextRun(rule);
     return rule;
   }
@@ -158,6 +159,14 @@ export class Rules {
         this.runner.eventNote(open, `${ev.type}: ${ev.title}\n${String(ev.body || '').slice(0, 4000)}`);
         return open;
       }
+    }
+    // A rule with a limit waits while that many of its todos are still open, so a slow or stuck run never piles up.
+    const limit = Number(rule.maxOpen) || 0;
+    if (limit > 0 && d.todos.filter((t) => t.ruleId === rule.id && !['done', 'closed'].includes(t.phase)).length >= limit) {
+      rule.skippedAt = now();
+      rule.skips = (rule.skips || 0) + 1;
+      this.store.changed();
+      return null;
     }
     // Event text may fill the short title, but never the rule's instructions: those stay the person's own words.
     const title = (ev ? fill(rule.title, { title: ev.title, type: ev.type, source: ev.source }) || ev.title : rule.title || rule.name).replace(/\s+/g, ' ').slice(0, 120);
@@ -175,6 +184,7 @@ export class Rules {
     if (ev) t.event = { source: ev.source, type: ev.type, url: ev.url || '', text: String(ev.body || ev.title || '').slice(0, 6000) };
     t.tell = rule.tell || 'gates';
     rule.lastAt = now();
+    rule.skippedAt = null;
     rule.runs = (rule.runs || 0) + 1;
     this.runner.start(t);
     this.store.changed();
@@ -188,7 +198,8 @@ export class Rules {
     const rec = { id: id('ev'), source: source.id, sourceName: source.name, at: now(), ...ev, body: String(ev.body || '').slice(0, 8000), todoIds: [] };
     for (const rule of d.rules) {
       if (!rule.enabled || this.paused(rule) || !matches(rule, { ...rec, source: source.id })) continue;
-      rec.todoIds.push(this.fire(rule, rec).id);
+      const t = this.fire(rule, rec);
+      if (t) rec.todoIds.push(t.id);
     }
     d.events.push(rec);
     if (d.events.length > 500) d.events.splice(0, d.events.length - 500);

@@ -142,12 +142,48 @@ function ProjectDetail({ project, state, onBack }: { project: Project; state: St
 
 function ChecksEditor({ project }: { project: Project }) {
   const t = useT();
-  const initial = { checks: (project.checks || []).join('\n'), preview: project.preview || '', delivery: project.delivery || 'merge' };
+  const lines = (x: string) => x.split('\n').map((l) => l.trim()).filter(Boolean);
+  const initial = {
+    checks: (project.checks || []).join('\n'),
+    preview: project.preview || '',
+    delivery: project.delivery || 'merge',
+    baseBranch: project.baseBranch || '',
+    branchTemplate: project.branchTemplate || '',
+    setup: project.setup || '',
+    pushBase: !!project.pushBase,
+    accept: !!project.autopilot?.accept,
+    maxFiles: project.autopilot?.maxFiles || 0,
+    protectedPaths: (project.protectedPaths || []).join('\n'),
+    backlogFile: project.backlog?.file || '',
+    backlogOpen: project.backlog?.maxOpen || 1,
+    upstreamUrl: project.upstream?.url || '',
+    upstreamBranch: project.upstream?.branch || 'main',
+    upstreamEvery: project.upstream?.every ?? 60,
+  };
   const [v, setV] = useState(initial);
+  const [note, setNote] = useState('');
   const { error, guard } = useError();
   const dirty = JSON.stringify(v) !== JSON.stringify(initial);
+  // autodos.json was loaded (or something else changed the project): show what is saved now.
+  useEffect(() => setV(initial), [JSON.stringify(initial)]);
+  const patch = () => ({
+    id: project.id,
+    checks: lines(v.checks),
+    preview: v.preview.trim(),
+    delivery: v.delivery,
+    baseBranch: v.baseBranch.trim(),
+    branchTemplate: v.branchTemplate.trim(),
+    setup: v.setup.trim(),
+    pushBase: v.pushBase,
+    autopilot: { ...(project.autopilot || {}), accept: v.accept, maxFiles: v.maxFiles },
+    protectedPaths: lines(v.protectedPaths),
+    backlog: v.backlogFile.trim() ? { ...(project.backlog || {}), file: v.backlogFile.trim(), maxOpen: v.backlogOpen } : null,
+    upstream: v.upstreamUrl.trim() ? { ...(project.upstream || {}), url: v.upstreamUrl.trim(), branch: v.upstreamBranch.trim() || 'main', every: v.upstreamEvery } : null,
+  });
+  const up = project.upstream;
   return (
     <div className="narrow-col">
+      {project.configStale && <div className="error-line">{t.configStale}</div>}
       <Group title={t.checks} action={<button className="btn small ghost" onClick={guard(async () => {
         const [checks, preview] = await Promise.all([actions.detectChecks(project.id), actions.detectPreview(project.id)]);
         setV({ ...v, checks: v.checks || checks.join('\n'), preview: v.preview || preview.command });
@@ -170,14 +206,87 @@ function ChecksEditor({ project }: { project: Project }) {
           </div>
         </Row>
       </Group>
+      {project.git && (
+        <Group title={t.branches}>
+          <Row label={t.baseBranch} sub={t.baseBranchHint}>
+            <input className="mono" value={v.baseBranch} placeholder="main" onChange={(e) => setV({ ...v, baseBranch: e.target.value })} aria-label={t.baseBranch} />
+          </Row>
+          <Row label={t.branchTemplate} sub={t.branchTemplateHint}>
+            <input className="mono" value={v.branchTemplate} placeholder="autodos/todo-{number}" onChange={(e) => setV({ ...v, branchTemplate: e.target.value })} aria-label={t.branchTemplate} />
+          </Row>
+          <Row label={t.setupCmd} sub={t.setupCmdHint}>
+            <input className="mono" value={v.setup} placeholder="npm ci" onChange={(e) => setV({ ...v, setup: e.target.value })} aria-label={t.setupCmd} />
+          </Row>
+          <Row label={t.pushBase}>
+            <Switch checked={v.pushBase} onChange={(x) => setV({ ...v, pushBase: x })} label={t.pushBase} />
+          </Row>
+        </Group>
+      )}
+      {project.git && (
+        <Group
+          title={t.unattended}
+          action={
+            <button
+              className="btn small ghost"
+              onClick={guard(async () => {
+                const r = await actions.loadConfig(project.id);
+                setNote([`${t.configLoaded}: ${r.applied.join(', ')}`, ...r.warnings].join(' · '));
+              })}
+            >
+              {t.loadConfig}
+            </button>
+          }
+        >
+          <Row label={t.autoAccept} sub={t.autoAcceptHint}>
+            <Switch checked={v.accept} onChange={(x) => setV({ ...v, accept: x })} label={t.autoAccept} />
+          </Row>
+          {v.accept && (
+            <Row label={t.maxFiles} sub={t.noLimit}>
+              <Num value={v.maxFiles} min={0} max={100000} onChange={(x) => setV({ ...v, maxFiles: x })} unit={t.filesUnit} label={t.maxFiles} />
+            </Row>
+          )}
+          <div className="g-row stack">
+            <label className="g-label">
+              <span>{t.protectedPaths}</span>
+              <small>{t.protectedPathsHint}</small>
+            </label>
+            <textarea className="checks-edit" rows={3} value={v.protectedPaths} placeholder={'deploy/*\n.github/workflows/*\n*.env'} onChange={(e) => setV({ ...v, protectedPaths: e.target.value })} aria-label={t.protectedPaths} />
+          </div>
+          <Row label={t.backlogFile} sub={project.backlog?.lastError || (project.backlog?.left != null ? `${project.backlog.left} ${t.backlogLeft}` : t.backlogHint)}>
+            <input className="mono" value={v.backlogFile} placeholder="docs/BACKLOG.md" onChange={(e) => setV({ ...v, backlogFile: e.target.value })} aria-label={t.backlogFile} />
+          </Row>
+          {v.backlogFile.trim() && (
+            <Row label={t.backlogOpen}>
+              <Num value={v.backlogOpen} min={1} max={20} onChange={(x) => setV({ ...v, backlogOpen: x })} label={t.backlogOpen} />
+            </Row>
+          )}
+          <Row label={t.upstreamRepo} sub={t.upstreamHint}>
+            <input className="mono" value={v.upstreamUrl} placeholder="https://github.com/owner/repo" onChange={(e) => setV({ ...v, upstreamUrl: e.target.value })} aria-label={t.upstreamRepo} />
+          </Row>
+          {v.upstreamUrl.trim() && (
+            <>
+              <Row label={t.upstreamBranch}>
+                <input className="mono" value={v.upstreamBranch} onChange={(e) => setV({ ...v, upstreamBranch: e.target.value })} aria-label={t.upstreamBranch} />
+              </Row>
+              <Row label={t.upstreamEvery} sub={up?.lastAt ? `${t.lastSync}: ${up.lastResult || ''}${up.lastError ? ` (${up.lastError})` : ''}` : undefined}>
+                <Num value={v.upstreamEvery} min={0} max={10080} onChange={(x) => setV({ ...v, upstreamEvery: x })} unit={t.minutesShort} label={t.upstreamEvery} />
+                {up?.url && !dirty && (
+                  <button className="btn small ghost" onClick={guard(async () => setNote(`${t.lastSync}: ${(await actions.syncUpstream(project.id)).state}`))}>
+                    {t.syncNow}
+                  </button>
+                )}
+              </Row>
+            </>
+          )}
+          <div className="g-row">
+            <small className="muted">{note || t.configHint}</small>
+          </div>
+        </Group>
+      )}
       <div className="form-foot">
         {error && <span className="error-line">{error}</span>}
         <span className="grow" />
-        <button
-          className="btn primary"
-          disabled={!dirty}
-          onClick={guard(() => actions.save('projects', { id: project.id, checks: v.checks.split('\n').map((x) => x.trim()).filter(Boolean), preview: v.preview.trim(), delivery: v.delivery }))}
-        >
+        <button className="btn primary" disabled={!dirty} onClick={guard(() => actions.save('projects', patch()))}>
           {t.save}
         </button>
       </div>
@@ -433,6 +542,9 @@ function RuleSheet({ rule, state, onClose }: { rule: Partial<Rule>; state: State
             <option value="gates">{t.tellGates}</option>
             <option value="never">{t.tellNever}</option>
           </select>
+        </Row>
+        <Row label={t.ruleMaxOpen} sub={t.ruleMaxOpenHint}>
+          <Num value={r.maxOpen || 0} min={0} max={50} onChange={(x) => setR({ ...r, maxOpen: x })} label={t.ruleMaxOpen} />
         </Row>
         <Row label={t.titleTpl}>
           <input value={r.title || ''} placeholder={trig === 'event' ? '{title}' : r.name} onChange={(e) => setR({ ...r, title: e.target.value })} aria-label={t.titleTpl} />

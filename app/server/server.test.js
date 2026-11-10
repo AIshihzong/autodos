@@ -381,6 +381,7 @@ test('remote machine: a worker runs the turn on its own checkout and the result 
   const proj = path.join(tmp, 'proj-remote');
   execFileSync('git', ['clone', '-q', origin, proj]);
   const { body: p } = await call('POST', '/projects', { path: proj });
+  await call('PATCH', `/projects/${p.id}`, { branchTemplate: 'work/{number}-{slug}', setup: 'echo ready > "$(git rev-parse --git-dir)/setup-ran"' });
   const { body: m } = await call('POST', '/workers', { name: 'mac-two', capacity: 1 });
   assert.match(m.key, /^cbk_/);
   const { body: agent } = await call('POST', '/agents', { name: 'Remote dev', role: 'anything', machine: 'mac-two' });
@@ -399,6 +400,9 @@ test('remote machine: a worker runs the turn on its own checkout and the result 
     await waitFor(async () => (await phaseOf(t.number)) === 'review', 30000);
     const after = (await call('GET', `/todos/${t.number}`)).body;
     assert.ok(fs.existsSync(path.join(after.worktree, 'remote.txt')), 'the remote change is in the local worktree');
+    assert.match(after.branch, /^work\/\d+-do-it-remotely$/, 'the worker accepted a branch named by the project template');
+    const made = fs.readdirSync(path.join(workerDir, 'worktrees')).flatMap((r) => fs.readdirSync(path.join(workerDir, 'worktrees', r)).map((w) => path.join(workerDir, 'worktrees', r, w)));
+    assert.ok(made.some((w) => fs.existsSync(path.join(execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: w }).toString().trim(), 'setup-ran'))), 'the setup command ran in the worker checkout');
     assert.match(after.diff, /remote\.txt/);
     const w = (await call('GET', '/state')).body.workers.find((x) => x.id === 'mac-two');
     assert.equal(w.online, true);
@@ -473,7 +477,7 @@ test('pull requests: Done opens a PR, CI failure goes back to the agent, the fix
   const bin = path.join(tmp, 'fakebin');
   fs.mkdirSync(bin);
   const state = path.join(tmp, 'pr-state.json');
-  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\necho "$@" >> "${tmp}/gh-calls.log"\ncase "$1 $2" in\n  "pr create") echo "https://github.com/o/r/pull/7" ;;\n  "pr view") cat "${state}" ;;\nesac\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\necho "$@" >> "${tmp}/gh-calls.log"\ncase "$1 $2" in\n  "pr create") echo "https://github.com/o/r/pull/7" ;;\n  "pr view") cat "${state}" ;;\n  "run view") echo "FAILLOG expected 2 but got 3" ;;\nesac\n`, { mode: 0o755 });
   const oldPath = process.env.PATH;
   process.env.PATH = `${bin}:${oldPath}`;
   try {
@@ -498,10 +502,12 @@ test('pull requests: Done opens a PR, CI failure goes back to the agent, the fix
     assert.equal(x.pr.number, 7);
     assert.ok(execFileSync('git', ['ls-remote', origin, x.branch]).toString().trim(), 'branch pushed to origin');
     // CI fails: the feedback reaches the agent as an outside event, it runs, and the result is pushed back.
-    fs.writeFileSync(state, JSON.stringify({ state: 'OPEN', statusCheckRollup: [{ name: 'test', conclusion: 'FAILURE', completedAt: '2026-11-09T10:00:00Z' }], reviews: [{ id: 'r1', state: 'CHANGES_REQUESTED', body: 'Please add a test', author: { login: 'alice' } }], comments: [] }));
+    fs.writeFileSync(state, JSON.stringify({ state: 'OPEN', statusCheckRollup: [{ name: 'test', conclusion: 'FAILURE', completedAt: '2026-11-09T10:00:00Z', detailsUrl: 'https://github.com/o/r/actions/runs/123/job/456' }, { name: 'old run', conclusion: 'CANCELLED', completedAt: '2026-11-09T09:00:00Z' }], reviews: [{ id: 'r1', state: 'CHANGES_REQUESTED', body: 'Please add a test', author: { login: 'alice' } }], comments: [] }));
     await srv.delivery.poll(srv.store.todo(t.id));
     x = (await call('GET', `/todos/${t.number}`)).body;
     assert.ok(x.messages.some((m) => m.role === 'event' && /CI check "test" failure/.test(m.text) && /alice/.test(m.text)));
+    assert.ok(x.messages.some((m) => m.role === 'event' && /FAILLOG expected 2 but got 3/.test(m.text)), 'the failing part of the CI log comes with it');
+    assert.ok(!x.messages.some((m) => /old run/.test(m.text)), 'a cancelled run is not reported as a failure');
     await waitFor(async () => (await phaseOf(t.number)) === 'shipping', 20000);
     // The same feedback is not sent twice.
     await srv.delivery.poll(srv.store.todo(t.id));
@@ -670,4 +676,269 @@ test('Feishu: a request becomes a thread with a todo card, buttons decide, threa
   fs_.status = 'off';
   fs_.channel = null;
   delete srv.store.data.feishu;
+});
+
+// ---------- unattended projects ----------
+
+const sh = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd, stdio: 'pipe' }).toString().trim();
+/** A fresh repository on `main` with the given files committed. */
+const mkRepo = (name, files = { 'a.txt': 'a\n' }) => {
+  const repo = path.join(tmp, name);
+  fs.mkdirSync(repo);
+  sh(repo, 'init', '-q', '-b', 'main');
+  for (const [f, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(repo, f)), { recursive: true });
+    fs.writeFileSync(path.join(repo, f), text);
+  }
+  sh(repo, 'add', '.');
+  sh(repo, 'commit', '-qm', 'init');
+  return repo;
+};
+const todoOf = async (n) => (await call('GET', `/todos/${n}`)).body;
+/** Start a todo and write files into its worktree, standing in for the agent's edit. */
+const runTodo = async (projectId, title, files = {}) => {
+  const { body: t } = await call('POST', '/todos', { title, projectId, start: true });
+  const wt = await waitFor(async () => (await todoOf(t.number)).worktree);
+  for (const [f, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(wt, f)), { recursive: true });
+    fs.writeFileSync(path.join(wt, f), text);
+  }
+  return t;
+};
+
+test('base branch: work starts from and lands on the project base, on a branch named by the template, after setup ran', async () => {
+  const repo = mkRepo('repo-base');
+  sh(repo, 'branch', 'crew/main');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  await call('PATCH', `/projects/${p.id}`, { baseBranch: 'crew/main', branchTemplate: 'crew/{ref}/{slug}', setup: 'echo ready > "$(git rev-parse --git-dir)/setup-ran"' });
+  const t = await runTodo(p.id, 'AP-7 Add the b file', { 'b.txt': 'b\n' });
+  await waitFor(async () => (await phaseOf(t.number)) === 'review', 20000);
+  const x = await todoOf(t.number);
+  assert.equal(x.ref, 'AP-7', 'the reference is read from the title');
+  assert.equal(x.branch, 'crew/ap-7/ap-7-add-the-b-file');
+  assert.equal(x.base, 'crew/main');
+  assert.match(x.diff, /b\.txt/);
+  assert.deepEqual(x.files, ['b.txt']);
+  assert.ok(fs.existsSync(path.join(sh(x.worktree, 'rev-parse', '--absolute-git-dir'), 'setup-ran')), 'the setup command ran in the new worktree');
+  await call('POST', `/todos/${t.number}/action`, { action: 'done' });
+  await waitFor(async () => (await phaseOf(t.number)) === 'done', 20000);
+  assert.equal(sh(repo, 'show', 'crew/main:b.txt'), 'b', 'landed on the base branch');
+  assert.ok(!fs.existsSync(path.join(repo, 'b.txt')), 'the main checkout, on another branch, was not touched');
+  assert.equal(sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main');
+  assert.equal(sh(repo, 'log', '-1', '--format=%s', 'crew/main'), `Merge #${t.number}: AP-7 Add the b file`);
+});
+
+test('setup: a failing setup command stops the todo and says why', async () => {
+  const repo = mkRepo('repo-setup');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  await call('PATCH', `/projects/${p.id}`, { setup: 'echo "no lockfile" >&2; exit 3' });
+  const { body: t } = await call('POST', '/todos', { title: 'Needs setup', projectId: p.id, start: true });
+  await waitFor(async () => (await phaseOf(t.number)) === 'failed');
+  assert.match((await todoOf(t.number)).error, /setup command failed[\s\S]*no lockfile/);
+});
+
+test('autopilot: a clean change lands by itself; protected files, missing checks and empty changes are handled', async () => {
+  const repo = mkRepo('repo-auto');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  await call('PATCH', `/projects/${p.id}`, { checks: ['test -f a.txt'], autopilot: { accept: true }, protectedPaths: ['deploy/*'] });
+  // Checks pass, the review finds nothing: nobody has to click Done.
+  const a = await runTodo(p.id, 'Auto A', { 'ok.txt': 'ok\n' });
+  await waitFor(async () => (await phaseOf(a.number)) === 'done', 30000);
+  assert.ok(fs.existsSync(path.join(repo, 'ok.txt')), 'merged without the person');
+  assert.ok((await todoOf(a.number)).messages.some((m) => m.kind === 'autopilot' && /accepted without waiting/.test(m.text)));
+  // A protected path waits for the person, and says so.
+  const b = await runTodo(p.id, 'Auto B', { 'deploy/run.sh': 'echo hi\n' });
+  const left = await waitFor(async () => {
+    const x = await todoOf(b.number);
+    return x.phase === 'review' && x;
+  }, 30000);
+  assert.ok(left.messages.some((m) => /Left at Review for you: it touches protected files \(deploy\/run\.sh\)/.test(m.text)));
+  assert.ok(!fs.existsSync(path.join(repo, 'deploy')));
+  // So does the file that sets these rules.
+  const c = await runTodo(p.id, 'Auto C', { 'autodos.json': '{"autopilot":{"accept":true},"protectedPaths":[]}\n' });
+  const kept = await waitFor(async () => {
+    const x = await todoOf(c.number);
+    return x.phase === 'review' && x;
+  }, 30000);
+  assert.ok(kept.messages.some((m) => /protected files \(autodos\.json\)/.test(m.text)));
+  // Nothing changed: closed, and its empty branch is gone.
+  const d = await runTodo(p.id, 'Auto D');
+  await waitFor(async () => (await phaseOf(d.number)) === 'done', 30000);
+  const gone = await todoOf(d.number);
+  assert.equal(gone.worktree, null);
+  assert.equal(sh(repo, 'branch', '--list', gone.branch), '');
+  // Without checks nothing vouches for a change, so it waits.
+  await call('PATCH', `/projects/${p.id}`, { checks: [] });
+  const e = await runTodo(p.id, 'Auto E', { 'e.txt': 'e\n' });
+  const waits = await waitFor(async () => {
+    const x = await todoOf(e.number);
+    return x.phase === 'review' && x;
+  }, 30000);
+  assert.ok(waits.messages.some((m) => /no checks to vouch/.test(m.text)));
+  for (const t of [b, c, e]) await call('POST', `/todos/${t.number}/action`, { action: 'close' });
+});
+
+test('autopilot: checks that fail on top of the latest base go back to the agent, not to Review', async () => {
+  const repo = mkRepo('repo-auto2');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  // Passes in the todo's worktree, fails once main has moved: stands in for two changes that only break together.
+  await call('PATCH', `/projects/${p.id}`, { checks: ['test ! -f breaker.txt || test -f fixed.txt'], autopilot: { accept: true } });
+  const t = await runTodo(p.id, 'Auto late', { 'late.txt': 'x\n' });
+  // Main moves while the agent is still working in a worktree that started before it.
+  fs.writeFileSync(path.join(repo, 'breaker.txt'), 'b\n');
+  sh(repo, 'add', '.');
+  sh(repo, 'commit', '-qm', 'main moved');
+  const back = await waitFor(async () => {
+    const x = await todoOf(t.number);
+    return x.messages.some((m) => /Sent back to the agent to fix on top of the latest main/.test(m.text)) && x;
+  }, 40000);
+  assert.ok(back.messages.some((m) => m.hidden && /checks fail on the combined code/.test(m.text)));
+  // The "agent" fixes it; the next round lands.
+  fs.writeFileSync(path.join(back.worktree, 'fixed.txt'), 'f\n');
+  await waitFor(async () => (await phaseOf(t.number)) === 'done', 40000);
+  assert.ok(fs.existsSync(path.join(repo, 'late.txt')) && fs.existsSync(path.join(repo, 'fixed.txt')));
+});
+
+test('upstream sync: upstream changes merge into the base and are pushed; a conflict becomes a todo; upstream is never pushed to', async () => {
+  const up = path.join(tmp, 'up.git');
+  const origin = path.join(tmp, 'fork.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', up]);
+  const seed = mkRepo('up-seed', { 'shared.txt': 'base\n' });
+  sh(seed, 'remote', 'add', 'origin', up);
+  sh(seed, 'push', '-q', 'origin', 'main');
+  execFileSync('git', ['clone', '-q', '--bare', up, origin]);
+  const proj = path.join(tmp, 'fork-proj');
+  execFileSync('git', ['clone', '-q', origin, proj]);
+  const { body: p } = await call('POST', '/projects', { path: proj });
+  await call('PATCH', `/projects/${p.id}`, { baseBranch: 'main', pushBase: true, upstream: { url: up, branch: 'main', every: 0, mirror: true } });
+  assert.equal((await call('POST', `/projects/${p.id}/sync`, {})).body.state, 'current');
+  // Both sides move, in different files: merged, checked, pushed.
+  fs.writeFileSync(path.join(proj, 'fork.txt'), 'ours\n');
+  sh(proj, 'add', '.');
+  sh(proj, 'commit', '-qm', 'fork work');
+  fs.writeFileSync(path.join(seed, 'up.txt'), 'theirs\n');
+  sh(seed, 'add', '.');
+  sh(seed, 'commit', '-qm', 'upstream work');
+  sh(seed, 'push', '-q', 'origin', 'main');
+  const r = await call('POST', `/projects/${p.id}/sync`, {});
+  assert.equal(r.body.state, 'merged', JSON.stringify(r.body));
+  assert.ok(fs.existsSync(path.join(proj, 'up.txt')) && fs.existsSync(path.join(proj, 'fork.txt')));
+  assert.equal(sh(origin, 'rev-parse', 'main'), sh(proj, 'rev-parse', 'main'), 'the merged base was pushed to origin');
+  assert.equal(sh(origin, 'rev-parse', 'upstream/main'), sh(up, 'rev-parse', 'main'), 'origin carries a mirror of upstream');
+  assert.equal(sh(proj, 'remote', 'get-url', '--push', 'upstream'), 'autodos-never-pushes-upstream');
+  assert.equal(sh(up, 'log', '--format=%s', 'main').split('\n').length, 2, 'nothing was pushed to upstream');
+  // Both sides change the same line: an agent gets the merge as a todo.
+  fs.writeFileSync(path.join(proj, 'shared.txt'), 'ours\n');
+  sh(proj, 'commit', '-qam', 'fork edits shared');
+  fs.writeFileSync(path.join(seed, 'shared.txt'), 'theirs\n');
+  sh(seed, 'commit', '-qam', 'upstream edits shared');
+  sh(seed, 'push', '-q', 'origin', 'main');
+  const c = await call('POST', `/projects/${p.id}/sync`, {});
+  assert.equal(c.body.state, 'conflict', JSON.stringify(c.body));
+  const t = await todoOf(c.body.lastTodo);
+  assert.equal(t.title, 'Merge upstream main into main');
+  assert.match(t.description, /does not merge cleanly[\s\S]*git merge [0-9a-f]{40}/);
+  assert.equal(fs.readFileSync(path.join(proj, 'shared.txt'), 'utf8'), 'ours\n', 'the base is untouched until the merge is resolved');
+  // Asking again while that todo is open does not file a second one.
+  assert.equal((await call('POST', `/projects/${p.id}/sync`, {})).body.lastTodo, c.body.lastTodo);
+  await call('POST', `/todos/${t.number}/action`, { action: 'close' });
+});
+
+test('pull: commits pushed to the base on origin from elsewhere are taken in', async () => {
+  const origin = path.join(tmp, 'pull-origin.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+  const seed = mkRepo('pull-seed');
+  sh(seed, 'remote', 'add', 'origin', origin);
+  sh(seed, 'push', '-q', 'origin', 'main');
+  const proj = path.join(tmp, 'pull-proj');
+  execFileSync('git', ['clone', '-q', origin, proj]);
+  const { body: p } = await call('POST', '/projects', { path: proj });
+  await call('PATCH', `/projects/${p.id}`, { baseBranch: 'main', pushBase: true });
+  fs.writeFileSync(path.join(seed, 'elsewhere.txt'), 'x\n');
+  sh(seed, 'add', '.');
+  sh(seed, 'commit', '-qm', 'edited on GitHub');
+  sh(seed, 'push', '-q', 'origin', 'main');
+  assert.equal((await call('POST', `/projects/${p.id}/pull`, {})).body.state, 'merged');
+  assert.ok(fs.existsSync(path.join(proj, 'elsewhere.txt')));
+});
+
+test('backlog: unchecked items of a file in the repository become todos, a few at a time, each only once', async () => {
+  const { parseBacklog } = await import('./autopilot.js');
+  const text = '# Backlog\n\n- [ ] AP-1 First thing\n  details here\n  - [ ] a sub-step\n- [x] AP-2 Already done\n- [ ] Second thing\n\nSome prose.\n- [ ] Third thing\n';
+  const items = parseBacklog(text);
+  assert.deepEqual(items.map((i) => [i.done, i.title, i.ref]), [[false, 'AP-1 First thing', 'AP-1'], [true, 'AP-2 Already done', 'AP-2'], [false, 'Second thing', ''], [false, 'Third thing', '']]);
+  assert.equal(items[0].description, 'details here\n- [ ] a sub-step');
+  const repo = mkRepo('repo-backlog', { 'docs/BACKLOG.md': text });
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  await call('PATCH', `/projects/${p.id}`, { backlog: { file: 'docs/BACKLOG.md', maxOpen: 2, every: 60 } });
+  const first = (await call('POST', `/projects/${p.id}/backlog`, {})).body;
+  assert.equal(first.filed.length, 2);
+  assert.equal(first.left, 3);
+  const [one, two] = await Promise.all(first.filed.map(todoOf));
+  assert.equal(one.title, 'AP-1 First thing');
+  assert.equal(one.ref, 'AP-1');
+  assert.match(one.description, /details here[\s\S]*tick it there/);
+  assert.equal(two.title, 'Second thing');
+  assert.deepEqual((await call('POST', `/projects/${p.id}/backlog`, {})).body.filed, [], 'no more while two are open');
+  await call('POST', `/todos/${two.number}/action`, { action: 'close' });
+  const next = (await call('POST', `/projects/${p.id}/backlog`, {})).body.filed;
+  assert.equal(next.length, 1);
+  assert.equal((await todoOf(next[0])).title, 'Third thing', 'a closed item is not filed again; the next one is');
+  for (const n of [one.number, next[0]]) await call('POST', `/todos/${n}/action`, { action: 'close' });
+});
+
+test('autodos.json: the repository declares its own settings and rules, loaded only on request; a rule can cap its open todos', async () => {
+  const config = {
+    baseBranch: 'main',
+    branchTemplate: 'crew/{number}-{slug}',
+    setup: 'true',
+    checks: ['true'],
+    pushBase: false,
+    autopilot: { accept: true, maxFiles: 40 },
+    protectedPaths: ['deploy/*', '.github/workflows/*'],
+    backlog: { file: 'BACKLOG.md', maxOpen: 2 },
+    memory: { decisions: ['Never deploy from here'], declined: ['Paid image generation'] },
+    rules: [
+      { name: 'Nightly sweep', cron: '0 3 * * *', title: 'Nightly sweep', prompt: 'Look for flaky tests and fix one.', maxOpen: 1 },
+      { name: 'Broken', cron: 'nope', title: 'x' },
+    ],
+    bogus: 1,
+  };
+  const repo = mkRepo('repo-config', { 'autodos.json': JSON.stringify(config), 'BACKLOG.md': '- [x] nothing open\n' });
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  assert.equal((await call('GET', '/state')).body.projects.find((x) => x.id === p.id).autopilot, undefined, 'adding a project applies nothing by itself');
+  const r = await call('POST', `/projects/${p.id}/load-config`, {});
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.ok(r.body.warnings.some((w) => /bogus/.test(w)) && r.body.warnings.some((w) => /Rule "Broken" skipped/.test(w)));
+  let state = (await call('GET', '/state')).body;
+  const loaded = state.projects.find((x) => x.id === p.id);
+  assert.equal(loaded.branchTemplate, 'crew/{number}-{slug}');
+  assert.deepEqual(loaded.autopilot, { accept: true, review: true, maxFiles: 40 });
+  assert.deepEqual(loaded.protectedPaths, ['deploy/*', '.github/workflows/*']);
+  assert.equal(loaded.backlog.file, 'BACKLOG.md');
+  assert.deepEqual(loaded.memory.decisions.map((m) => m.text), ['Never deploy from here']);
+  const rule = state.rules.find((x) => x.fromConfig === p.id);
+  assert.equal(rule.name, 'Nightly sweep');
+  assert.equal(rule.projectId, p.id);
+  assert.ok(rule.nextAt);
+  // One open todo at a time for this rule.
+  const run1 = await call('POST', `/rules/${rule.id}/run`, {});
+  assert.equal(run1.status, 200);
+  assert.equal((await call('POST', `/rules/${rule.id}/run`, {})).status, 409);
+  await call('POST', `/todos/${run1.body.number}/action`, { action: 'close' });
+  assert.equal((await call('POST', `/rules/${rule.id}/run`, {})).status, 200);
+  // The file changes on the base: nothing is applied until the person loads it again.
+  fs.writeFileSync(path.join(repo, 'autodos.json'), JSON.stringify({ ...config, rules: [], autopilot: { accept: false } }));
+  sh(repo, 'commit', '-qam', 'config changed');
+  await srv.autopilot.tick();
+  srv.autopilot.last.clear();
+  await srv.autopilot.tick();
+  state = (await call('GET', '/state')).body;
+  assert.equal(state.projects.find((x) => x.id === p.id).configStale, true);
+  assert.equal(state.projects.find((x) => x.id === p.id).autopilot.accept, true);
+  await call('POST', `/projects/${p.id}/load-config`, {});
+  state = (await call('GET', '/state')).body;
+  assert.equal(state.projects.find((x) => x.id === p.id).autopilot.accept, false);
+  assert.equal(state.rules.filter((x) => x.fromConfig === p.id).length, 0, 'rules the file no longer lists are removed');
+  for (const t of state.todos.filter((x) => x.projectId === p.id && !['done', 'closed'].includes(x.phase))) await call('POST', `/todos/${t.number}/action`, { action: 'close' });
 });

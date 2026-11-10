@@ -2,7 +2,7 @@
 // review comments come back to the same todo as outside events until the PR is merged or closed.
 import { execFile } from 'node:child_process';
 import { childEnv } from './runtimes.js';
-import { git, commitAll, removeWorktree } from './git.js';
+import { git, commitAll, removeWorktree, baseOf } from './git.js';
 
 export function gh(cwd, args) {
   return new Promise((resolve, reject) => {
@@ -13,7 +13,14 @@ export function gh(cwd, args) {
   });
 }
 
-const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
+// A cancelled run (a newer push replaced it, someone stopped it) says nothing about the code.
+const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
+
+/** The title a pull request gets: the project's template ({ref}, {number}, {title}), else the todo's title. */
+export function prTitle(template, t) {
+  const out = String(template || '{title}').replace(/\{title\}/g, t.title).replace(/\{number\}/g, t.number).replace(/\{ref\}/g, t.ref || `#${t.number}`).replace(/\s+/g, ' ').trim();
+  return (out || t.title).slice(0, 240);
+}
 
 /** New feedback in a PR view: failing checks and review comments we haven't passed on yet. */
 export function prFeedback(view, seen = []) {
@@ -24,7 +31,8 @@ export function prFeedback(view, seen = []) {
     if (!FAILED.has(String(verdict).toUpperCase())) continue;
     const key = `check:${c.name || c.context}:${c.completedAt || c.startedAt || verdict}`;
     if (known.has(key)) continue;
-    items.push({ key, text: `CI check "${c.name || c.context}" ${String(verdict).toLowerCase()}${c.detailsUrl || c.targetUrl ? ` (${c.detailsUrl || c.targetUrl})` : ''}` });
+    const link = c.detailsUrl || c.targetUrl || '';
+    items.push({ key, text: `CI check "${c.name || c.context}" ${String(verdict).toLowerCase()}${link ? ` (${link})` : ''}`, run: link.match(/\/actions\/runs\/(\d+)/)?.[1] || '' });
   }
   for (const r of view.reviews || []) {
     if (!r.body?.trim() && r.state !== 'CHANGES_REQUESTED') continue;
@@ -63,7 +71,7 @@ export class Delivery {
   async ship(t) {
     const project = this.store.project(t.projectId);
     if (!project || !t.worktree) throw new Error('Pull requests need a git project with a worktree');
-    const base = t.pr?.base || (await git(project.path, ['rev-parse', '--abbrev-ref', 'HEAD']));
+    const base = t.pr?.base || t.base || (await baseOf(project.path, project));
     await commitAll(t.worktree, `#${t.number} ${t.title}`);
     const remoteSha = (await git(t.worktree, ['ls-remote', 'origin', `refs/heads/${t.branch}`]).catch(() => '')).split(/\s+/)[0] || '';
     await git(t.worktree, ['push', `--force-with-lease=refs/heads/${t.branch}:${remoteSha}`, 'origin', `HEAD:refs/heads/${t.branch}`]);
@@ -84,7 +92,7 @@ export class Delivery {
       ]
         .filter(Boolean)
         .join('\n\n');
-      const url = (await gh(project.path, ['pr', 'create', '--head', t.branch, '--base', base, '--title', `${t.title}`, '--body', body])).split('\n').pop();
+      const url = (await gh(project.path, ['pr', 'create', '--head', t.branch, '--base', base, '--title', prTitle(project.prTitle, t), '--body', body])).split('\n').pop();
       const number = Number(url.match(/\/pull\/(\d+)/)?.[1]);
       if (!number) throw new Error(`gh did not return a pull request URL: ${url}`);
       t.pr = { number, url, base, seen: [] };
@@ -120,6 +128,14 @@ export class Delivery {
         this.runner.setPhase(t, 'closed');
       } else {
         const fresh = prFeedback(view, t.pr.seen);
+        // A failed check alone only says "red": bring the failing part of its log, so the agent can fix it without guessing.
+        const logs = new Map();
+        for (const f of fresh) {
+          if (!f.run || logs.size >= 3) continue;
+          if (!logs.has(f.run)) logs.set(f.run, await gh(project.path, ['run', 'view', f.run, '--log-failed']).then((x) => x.slice(-4000), () => ''));
+          if (logs.get(f.run)) f.text += `\nThe end of the failing log:\n${logs.get(f.run)}`;
+          logs.set(f.run, ''); // one copy per run, even when several of its jobs failed
+        }
         if (fresh.length) {
           t.pr.seen = [...t.pr.seen, ...fresh.map((f) => f.key)].slice(-300);
           t.prFeedback = true;

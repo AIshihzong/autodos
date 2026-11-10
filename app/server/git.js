@@ -23,16 +23,90 @@ export async function isGitRepo(dir) {
   }
 }
 
-/** Create (or reuse) a worktree for a todo. Returns { dir, branch } or null if not a git repo. */
-export async function ensureWorktree(repo, baseDir, number) {
+export const WHO = ['-c', 'user.name=Autodos', '-c', 'user.email=autodos@localhost'];
+const sha = (repo, ref) => git(repo, ['rev-parse', '-q', '--verify', ref]).catch(() => '');
+
+/** A name git accepts for a branch, and that is safe to pass on a command line. */
+export async function validBranch(repo, name) {
+  if (!name || /^-|\s/.test(name)) return false;
+  return git(repo, ['check-ref-format', '--branch', name]).then(
+    () => true,
+    () => false,
+  );
+}
+
+/**
+ * The branch a project's work starts from and lands on: project.baseBranch, else whatever the main
+ * checkout has. A base that only exists on origin so far gets its local branch here.
+ */
+export async function baseOf(repo, project) {
+  const name = String(project?.baseBranch || '').trim();
+  if (!name) return git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (!(await validBranch(repo, name))) throw new Error(`"${name}" is not a valid base branch name`);
+  if (await sha(repo, `refs/heads/${name}`)) return name;
+  if (!(await sha(repo, `refs/remotes/origin/${name}`))) await git(repo, ['fetch', '--quiet', 'origin', `+refs/heads/${name}:refs/remotes/origin/${name}`]).catch(() => {});
+  if (!(await sha(repo, `refs/remotes/origin/${name}`))) throw new Error(`Base branch "${name}" exists neither in ${repo} nor on its origin`);
+  await git(repo, ['branch', '--track', name, `origin/${name}`]);
+  return name;
+}
+
+/** How git names a base: a branch, or HEAD for a checkout that is on no branch. */
+export const baseRef = (base) => (!base || base === 'HEAD' ? 'HEAD' : `refs/heads/${base}`);
+
+const REF = /^\[?([A-Za-z][A-Za-z0-9]*-\d+(?:-\d+)*)\]?(?=[\s:：.，,)]|$)/;
+/** A reference like AP-041 or [BUG-12] at the start of a title, or ''. */
+export const refOf = (title) => String(title || '').trim().match(REF)?.[1] || '';
+
+/** The branch name for a todo, from the project's template. {number}, {slug} and {ref} are filled in. */
+export function branchName(template, t) {
+  const slug =
+    String(t.title || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40)
+      .replace(/-+$/, '') || `todo-${t.number}`;
+  const ref =
+    String(t.ref || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^[-.]+|[-.]+$/g, '') || `todo-${t.number}`;
+  return String(template || '').trim().replace(/\{number\}/g, t.number).replace(/\{slug\}/g, slug).replace(/\{ref\}/g, ref) || `autodos/todo-${t.number}`;
+}
+
+/** Where a branch is checked out (the main checkout or a worktree), or '' when nowhere. */
+export async function checkoutOf(repo, branch) {
+  const out = await git(repo, ['worktree', 'list', '--porcelain']);
+  let dir = '';
+  for (const line of out.split('\n')) {
+    if (line.startsWith('worktree ')) dir = line.slice(9);
+    else if (line === `branch refs/heads/${branch}`) return dir;
+  }
+  return '';
+}
+
+/**
+ * Create (or reuse) a worktree for a todo. Returns { dir, branch, created } or null if not a git repo.
+ * `branch` is the name to use for a new one, `base` what it starts from (default: the main checkout's HEAD).
+ * `own` says the todo already had this branch; a name that exists but is not its own is never shared.
+ */
+export async function ensureWorktree(repo, baseDir, number, { branch = `autodos/todo-${number}`, base = '', own = true } = {}) {
   if (!(await isGitRepo(repo))) return null;
-  const branch = `autodos/todo-${number}`;
   const dir = path.join(baseDir, `todo-${number}`);
-  if (fs.existsSync(dir)) return { dir, branch };
+  if (fs.existsSync(dir)) {
+    // Left from an earlier run: keep whatever branch it is on.
+    const cur = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '');
+    return { dir, branch: cur && cur !== 'HEAD' ? cur : branch, created: false };
+  }
+  if (!(await validBranch(repo, branch))) throw new Error(`"${branch}" is not a valid branch name; check the project's branch template`);
   fs.mkdirSync(baseDir, { recursive: true });
-  const exists = await git(repo, ['branch', '--list', branch]);
-  await git(repo, exists ? ['worktree', 'add', dir, branch] : ['worktree', 'add', '-b', branch, dir]);
-  return { dir, branch };
+  let exists = await sha(repo, `refs/heads/${branch}`);
+  if (exists && !own) {
+    branch = `${branch}-${number}`;
+    exists = await sha(repo, `refs/heads/${branch}`);
+  }
+  await git(repo, exists ? ['worktree', 'add', dir, branch] : ['worktree', 'add', '-b', branch, dir, ...(base && base !== 'HEAD' ? [base] : [])]);
+  return { dir, branch, created: true };
 }
 
 /** Commit anything the agent left uncommitted in the worktree. Returns true if a commit was made. */
@@ -44,24 +118,33 @@ export async function commitAll(dir, message) {
   return true;
 }
 
-/** Full unified diff of the todo branch against the main checkout's branch, capped in size. */
-export async function diffText(repo, branch, limit = 100_000) {
+const DIFF_CUT = '\n… (diff truncated)';
+export const diffTruncated = (diff) => String(diff || '').endsWith(DIFF_CUT);
+
+/** Full unified diff of the todo branch against its base (default: the main checkout's branch), capped in size. */
+export async function diffText(repo, branch, { base = '', limit = 100_000 } = {}) {
   try {
-    const base = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
-    const out = await git(repo, ['diff', '--no-color', '--no-ext-diff', `${base}...${branch}`]);
-    return out.length > limit ? out.slice(0, limit) + '\n… (diff truncated)' : out;
+    const from = base || (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']));
+    const out = await git(repo, ['diff', '--no-color', '--no-ext-diff', `${from}...${branch}`]);
+    return out.length > limit ? out.slice(0, limit) + DIFF_CUT : out;
   } catch {
     return '';
   }
 }
 
-export async function diffStat(repo, branch) {
+export async function diffStat(repo, branch, base = '') {
   try {
-    const base = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
-    return await git(repo, ['diff', '--stat', `${base}...${branch}`]);
+    const from = base || (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']));
+    return await git(repo, ['diff', '--stat', `${from}...${branch}`]);
   } catch {
     return '';
   }
+}
+
+/** Every file the todo branch changes against its base (names only, so no size cap cuts it short). Throws if git can't tell. */
+export async function diffFiles(repo, branch, base = '') {
+  const from = base || (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']));
+  return (await git(repo, ['diff', '--name-only', `${from}...${branch}`])).split('\n').filter(Boolean);
 }
 
 const mergeInProgress = (repo) =>
@@ -81,6 +164,38 @@ export async function mergeBranch(repo, branch, message) {
     if (head && head === ours) await git(repo, ['merge', '--abort']).catch(() => {});
     throw e;
   }
+}
+
+/**
+ * Land a commit on the base branch. Where the base is checked out (usually the main checkout) this is an
+ * ordinary merge there. A base nobody has checked out is moved directly, and only if it is still at
+ * `expect`, so nothing that arrived in between is lost.
+ */
+export async function landBranch(repo, base, branch, message, expect = '') {
+  if (!base || base === 'HEAD') return mergeBranch(repo, branch, message);
+  const where = await checkoutOf(repo, base);
+  if (where) return mergeBranch(where, branch, message);
+  const baseSha = await git(repo, ['rev-parse', `refs/heads/${base}`]);
+  if (expect && expect !== baseSha) throw new Error(`${base} moved while this was being checked`);
+  const tip = await git(repo, ['rev-parse', `${branch}^{commit}`]);
+  const contains = await git(repo, ['merge-base', '--is-ancestor', baseSha, tip]).then(
+    () => true,
+    () => false,
+  );
+  if (!contains) throw new Error(`${branch} does not contain the latest ${base}`);
+  // The branch already holds the merged result, so its tree is what the merge commit records.
+  const commit = await git(repo, [...WHO, 'commit-tree', `${tip}^{tree}`, '-p', baseSha, '-p', tip, '-m', message]);
+  await git(repo, ['update-ref', '-m', `autodos: ${message}`, `refs/heads/${base}`, commit, baseSha]);
+}
+
+/** Move the base branch forward to a commit that already contains it (no merge commit). */
+export async function fastForward(repo, base, commit, expect) {
+  const where = await checkoutOf(repo, base);
+  if (where) {
+    if (await mergeInProgress(where)) throw new Error('The project already has a merge in progress. Finish or abort it first.');
+    return git(where, ['merge', '--ff-only', commit]);
+  }
+  await git(repo, ['update-ref', '-m', 'autodos: fast-forward', `refs/heads/${base}`, commit, expect]);
 }
 
 export async function removeWorktree(repo, dir, branch, deleteBranch) {

@@ -163,14 +163,20 @@ function toolHint(input = {}) {
 }
 
 const codex = {
-  async run({ prompt, cwd, kind, model, signal, onText, env }) {
+  async run({ prompt, cwd, kind, model, signal, onText, env, settings = {} }) {
     // A private temp folder per run, so parallel runs never share an output file.
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'autodos-codex-'));
     const out = path.join(tmp, 'last-message.txt');
     const args = ['exec', '--skip-git-repo-check', '--output-last-message', out];
     if (['plan', 'chief', 'review'].includes(kind)) args.push('--sandbox', 'read-only');
     // `codex exec` never stops to ask; workspace-write lets it edit the todo's folder. (--full-auto was removed in newer Codex.)
-    else args.push('--sandbox', 'workspace-write');
+    // That sandbox has no network and keeps .git read-only, so installing packages or finishing a merge needs more room:
+    // "network" opens the network inside the sandbox, "danger-full-access" runs without one.
+    else if (settings.codexSandbox === 'danger-full-access') args.push('--sandbox', 'danger-full-access');
+    else {
+      args.push('--sandbox', 'workspace-write');
+      if (settings.codexSandbox === 'network') args.push('-c', 'sandbox_workspace_write.network_access=true');
+    }
     if (model) args.push('-m', model);
     args.push(prompt);
     let text = '';

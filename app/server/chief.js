@@ -2,6 +2,7 @@
 import { id, now } from './store.js';
 import { runtimes, resolveRuntime } from './runtimes.js';
 import { memoryBlock } from './quality.js';
+import { refOf } from './git.js';
 import { nextRun } from './rules.js';
 import { retroStats, retroText } from './retro.js';
 
@@ -279,6 +280,7 @@ Answer with JSON only, no prose and no code fence:
     const cn = zh(t.title);
     const topicId = t.topicId;
     if (t.phase === 'confirm') this.say(cn ? `${ref} 的计划写好了，等你确认。` : `${ref}: plan is ready for you to confirm.`, { todoIds: [t.id], topicId });
+    else if (t.phase === 'review' && t.autoAccepting) return; // accepted without the person: nothing to ask of them
     else if (t.phase === 'review') this.say(cn ? `${ref} 完成了，等你审核。` : `${ref} is ready for your review.`, { todoIds: [t.id], topicId });
     else if (t.phase === 'asking') this.say(cn ? `${ref} 需要你拍板：${t.question?.text || ''}` : `${ref} needs your decision: ${t.question?.text || ''}`, { todoIds: [t.id], topicId });
     else if (t.phase === 'failed') this.say(cn ? `${ref} 失败了：${t.error || ''}` : `${ref} failed: ${t.error || ''}`, { todoIds: [t.id], error: true, topicId });
@@ -352,6 +354,9 @@ export function newTodo(store, fields) {
     updatedAt: now(),
     scheduleId: fields.scheduleId || null,
   };
+  // A reference the person's own tracker uses (AP-041): given, or read from the start of the title.
+  const ref = String(fields.ref || refOf(t.title)).trim().slice(0, 60);
+  if (ref) t.ref = ref;
   store.data.todos.push(t);
   store.changed();
   return t;

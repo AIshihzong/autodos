@@ -439,6 +439,13 @@ export function SettingsPage({ state, theme, setTheme, lang, setLang, font, setF
                   <option value="bypassPermissions">{t.permAll}</option>
                 </select>
               </Row>
+              <Row label={t.codexSandbox} sub={t.codexSandboxHint}>
+                <select value={s.codexSandbox || 'workspace-write'} onChange={(e) => set({ codexSandbox: e.target.value } as any)} aria-label={t.codexSandbox}>
+                  <option value="workspace-write">{t.sandboxWrite}</option>
+                  <option value="network">{t.sandboxNetwork}</option>
+                  <option value="danger-full-access">{t.sandboxFull}</option>
+                </select>
+              </Row>
               <Row label={t.steerSetting}>
                 <Switch label={t.steerSetting} checked={s.steer !== false} onChange={(v) => set({ steer: v } as any)} />
               </Row>

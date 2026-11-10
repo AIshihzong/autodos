@@ -5,7 +5,7 @@ export interface Message { hidden?: boolean; id: string; role: 'user' | 'agent' 
 export interface Todo {
   id: string; number: number; title: string; description: string; labels: string[]; projectId: string | null; agentId: string | null;
   phase: Phase; mode: 'plan' | 'run'; plan: string; planApproved: boolean; messages: Message[]; live: string; runtime?: string;
-  worktree?: string | null; branch?: string; diffStat?: string; diff?: string; stage?: 'verifying' | 'fixing' | 'reviewing' | null;
+  worktree?: string | null; branch?: string; diffStat?: string; diff?: string; stage?: 'setup' | 'verifying' | 'fixing' | 'reviewing' | null; base?: string; ref?: string; files?: string[] | null;
   question?: { text: string; options: string[]; at: string } | null; ruleId?: string | null; parentId?: string | null; depth?: number;
   pr?: { number: number; url: string; base: string; state?: string } | null; event?: { source: string; type: string; url: string; text: string } | null;
   checks?: { results: CheckResult[]; passed: boolean; fixes: number; at: string } | null; review?: { reviewer: string; summary: string; findings: Finding[]; at: string } | null; error?: string | null; createdAt: string; updatedAt: string; scheduleId?: string | null;
@@ -16,7 +16,7 @@ export interface MemoryItem { text: string; at: string; todo?: number }
 export interface Rule {
   id: string; name: string; enabled: boolean; when: { cron?: string; every?: number; source?: string; types?: string[] };
   agentId?: string | null; projectId?: string | null; mode: 'run' | 'plan'; title: string; prompt: string; tell: 'gates' | 'never';
-  nextAt?: string | null; lastAt?: string; runs?: number; pausedUntil?: string; pauseReason?: string;
+  nextAt?: string | null; lastAt?: string; runs?: number; pausedUntil?: string; pauseReason?: string; maxOpen?: number; skippedAt?: string | null; fromConfig?: string;
 }
 export interface Source { id: string; name: string; kind: 'webhook' | 'github' | 'github-poll'; repo?: string; everyMinutes?: number; lastPollAt?: string; lastError?: string | null; createdAt: string; hasKey: boolean }
 export interface EventRec { id: string; source: string; sourceName: string; type: string; title: string; url?: string; at: string; todoIds: string[] }
@@ -30,7 +30,13 @@ export interface FixJob { running: boolean; ok: boolean | null; log: string; com
 export interface Doctor { ready: boolean; agent: boolean; items: DoctorItem[]; platform: string; host: string; at: string; jobs: Record<string, FixJob> }
 export type FixResult = { kind: 'run' | 'terminal' | 'manual' | 'none'; command?: string } | { kind: 'link'; url: string };
 export interface Retro { days: number; created: number; done: number; open: number; runs: number; failedRuns: number; agentMs: number; usd: number; unpricedRuns: number; tokens: number; reworkRate: number; checksFirstPass: number | null; findings: { high: number; medium: number; low: number }; conflicts: number; medianLeadMs: number | null; reworked: { number: number; title: string; rounds: number }[]; failures: { text: string; count: number }[] }
-export interface Project { id: string; name: string; path: string; git?: boolean; checks?: string[]; preview?: string; delivery?: 'merge' | 'pr'; memory?: { decisions: MemoryItem[]; declined: MemoryItem[] } }
+export interface Upstream { url: string; branch: string; every: number; mirror?: boolean; lastAt?: string; lastResult?: string; lastError?: string | null; lastTodo?: number }
+export interface Project {
+  id: string; name: string; path: string; git?: boolean; checks?: string[]; preview?: string; delivery?: 'merge' | 'pr'; memory?: { decisions: MemoryItem[]; declined: MemoryItem[] };
+  baseBranch?: string; branchTemplate?: string; prTitle?: string; setup?: string; pushBase?: boolean; protectedPaths?: string[];
+  autopilot?: { accept: boolean; review?: boolean; maxFiles?: number } | null; upstream?: Upstream | null;
+  backlog?: { file: string; every?: number; maxOpen?: number; left?: number; lastError?: string | null } | null; configAt?: string; configStale?: boolean; pullError?: string | null;
+}
 export interface Schedule { id: string; title: string; description: string; projectId?: string | null; agentId?: string | null; everyMinutes: number; enabled: boolean; mode: 'plan' | 'run'; nextAt?: string; lastAt?: string }
 export interface ChiefMessage { id: string; role: 'user' | 'chief'; text: string; at: string; todoIds?: string[]; error?: boolean; topicId?: string }
 export interface Topic { id: string; title: string; archived: boolean; createdAt: string; updatedAt: string }
@@ -38,7 +44,7 @@ export interface FileEntry { name: string; dir: boolean; path: string }
 export interface Commit { hash: string; author: string; date: string; subject: string }
 export interface Run { id: string; todoId: string; number: number; agentId?: string; runtime: string; kind: string; ok: boolean; startedAt: string; durationMs: number; inputTokens: number; outputTokens: number; costUsd: number; costKnown?: boolean }
 export interface Runtime { id: string; name: string; available: boolean; version: string }
-export interface Settings { concurrency: number; defaultRuntime: string; chiefRuntime: string; claudePermissionMode: string; useWorktrees: boolean; autoStart: boolean; planFirst: boolean; verify: boolean; verifyAttempts: number; reviewer: string; reviewAutoFix: boolean; budgetMinutes: number; budgetUsd: number; publicUrl?: string; delegateDepth: number; delegateChildren: number; steer?: boolean }
+export interface Settings { concurrency: number; defaultRuntime: string; chiefRuntime: string; claudePermissionMode: string; codexSandbox?: string; useWorktrees: boolean; autoStart: boolean; planFirst: boolean; verify: boolean; verifyAttempts: number; reviewer: string; reviewAutoFix: boolean; budgetMinutes: number; budgetUsd: number; publicUrl?: string; delegateDepth: number; delegateChildren: number; steer?: boolean }
 export interface State {
   settings: Settings; projects: Project[]; agents: Agent[]; todos: Todo[]; chief: ChiefMessage[]; chiefBusy: boolean; topics: Topic[]; mcpPath: string;
   workers: Worker[]; pairings: { code: string; words: string[]; host: string; name: string }[]; previews: { todoId: string; url: string; ready: boolean }[]; rules: Rule[]; sources: Source[]; events: EventRec[]; channels: Channel[]; runs: Run[]; runtimes: Runtime[]; dataDir: string; feishu: Feishu;
@@ -190,6 +196,8 @@ export const actions = {
   startPreview: (id: string) => api<{ url: string }>('POST', `/todos/${id}/preview`, {}),
   stopPreview: (id: string) => api('DELETE', `/todos/${id}/preview`),
   detectChecks: (id: string) => api<string[]>('GET', `/projects/${id}/detect-checks`),
+  syncUpstream: (id: string) => api<{ state: string; lastTodo?: number }>('POST', `/projects/${id}/sync`, {}),
+  loadConfig: (id: string) => api<{ from: string; applied: string[]; rules: number; warnings: string[] }>('POST', `/projects/${id}/load-config`, {}),
   remember: (project: Project, kind: 'decisions' | 'declined', text: string, todo?: number) => api('POST', `/projects/${project.id}/memory`, { kind, text, todo }),
   forget: (project: Project, kind: 'decisions' | 'declined', text: string) => api('DELETE', `/projects/${project.id}/memory`, { kind, text }),
   projectHistory: (id: string) => api<Commit[]>('GET', `/projects/${id}/history`),

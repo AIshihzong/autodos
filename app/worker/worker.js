@@ -12,7 +12,8 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runtimes, resolveRuntime, detectRuntimes } from '../server/runtimes.js';
-import { git, commitAll } from '../server/git.js';
+import { git, commitAll, validBranch } from '../server/git.js';
+import { runCheck } from '../server/quality.js';
 import { diagnose } from '../server/doctor.js';
 
 // This machine's environment check, sent with every poll and refreshed every 10 minutes.
@@ -29,6 +30,8 @@ function workerDir() {
 }
 
 const safe = (s) => String(s).replace(/[^\w.-]+/g, '_').slice(0, 60);
+/** Branches work lands on: a worker only ever pushes a todo's own branch. */
+const SHARED = new Set(['main', 'master', 'head', 'develop', 'trunk', 'production', 'release']);
 // One folder per exact repository URL: a hash keeps similar-looking URLs apart.
 const repoKey = (url) => `${safe(url.split('/').slice(-1)[0] || 'repo')}-${crypto.createHash('sha256').update(url).digest('hex').slice(0, 16)}`;
 
@@ -47,9 +50,10 @@ export async function runWorker({ hub, key, dir = workerDir(), capacity = 2, sig
     return out;
   };
 
-  async function checkout(job) {
+  async function checkout(job, signal) {
     if (!/^(https:\/\/|ssh:\/\/|git@|file:\/\/|\/)[^\s]+$/.test(job.repo)) throw new Error(`Refusing repository URL ${job.repo}`);
-    if (!/^autodos\/todo-\d+$/.test(job.branch)) throw new Error(`Refusing branch ${job.branch}`);
+    // Any branch name the project's template produces is fine, except the ones work lands on.
+    if (typeof job.branch !== 'string' || !/^[\w][\w./-]{0,200}$/.test(job.branch) || job.branch === job.base || SHARED.has(job.branch.toLowerCase())) throw new Error(`Refusing branch ${job.branch}`);
     const repoDir = path.join(dir, 'repos', repoKey(job.repo));
     if (!fs.existsSync(repoDir)) {
       fs.mkdirSync(path.dirname(repoDir), { recursive: true });
@@ -57,14 +61,28 @@ export async function runWorker({ hub, key, dir = workerDir(), capacity = 2, sig
     }
     const origin = await git(repoDir, ['remote', 'get-url', 'origin']);
     if (origin !== job.repo) throw new Error(`Checkout at ${repoDir} belongs to ${origin}, not ${job.repo}`);
+    if (!(await validBranch(repoDir, job.branch))) throw new Error(`Refusing branch ${job.branch}`);
     await git(repoDir, ['fetch', '--quiet', 'origin', job.branch]);
-    const wt = path.join(dir, 'worktrees', repoKey(job.repo), safe(job.branch));
+    // Different branches must never share a folder: the readable name alone can collide, so a hash goes with it.
+    const root = path.join(dir, 'worktrees', repoKey(job.repo));
+    const plain = path.join(root, safe(job.branch)); // how folders were named before branch templates
+    const wt = fs.existsSync(plain) && /^autodos\/todo-\d+$/.test(job.branch) ? plain : path.join(root, `${safe(job.branch).slice(0, 40)}-${crypto.createHash('sha256').update(job.branch).digest('hex').slice(0, 10)}`);
+    const marker = path.join(dir, 'setup', crypto.createHash('sha256').update(wt).digest('hex').slice(0, 20));
     if (fs.existsSync(wt)) {
       await git(wt, ['reset', '--hard', `origin/${job.branch}`]);
       await git(wt, ['clean', '-fd']);
     } else {
       fs.mkdirSync(path.dirname(wt), { recursive: true });
       await git(repoDir, ['worktree', 'add', '-B', job.branch, wt, `origin/${job.branch}`]);
+      fs.rmSync(marker, { force: true });
+    }
+    // The project's setup command (install dependencies…) runs once per worktree, and again if it changes.
+    const setup = String(job.setup || '').trim();
+    if (setup && !(fs.existsSync(marker) && fs.readFileSync(marker, 'utf8') === setup)) {
+      const r = await runCheck(wt, setup, { signal, timeoutMs: 30 * 60_000 });
+      if (!r.ok) throw new Error(`The project's setup command failed on this machine (exit ${r.code}):\n$ ${setup}\n${r.output.slice(-2000)}`);
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(marker, setup);
     }
     return wt;
   }
@@ -104,7 +122,7 @@ export async function runWorker({ hub, key, dir = workerDir(), capacity = 2, sig
     const ticker = setInterval(() => flush(), 1500);
     try {
       log(`#${job.todo} ${job.kind}: ${job.title}`);
-      const cwd = await checkout(job);
+      const cwd = await checkout(job, ctrl.signal);
       const rt = resolveRuntime(job.runtimeId);
       const res = await runtimes[rt].run({
         prompt: job.prompt,

@@ -19,6 +19,7 @@ export function defaultData() {
       defaultRuntime: 'auto',
       chiefRuntime: 'auto',
       claudePermissionMode: 'acceptEdits',
+      codexSandbox: 'workspace-write',
       useWorktrees: true,
       autoStart: true,
       planFirst: false,
