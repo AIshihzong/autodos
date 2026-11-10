@@ -1,0 +1,34 @@
+{
+  "name": "autodos",
+  "version": "0.1.0",
+  "description": "A task board where you and your AI coding agents work together.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.js",
+    "build": "vite build && node scripts/vendor.js",
+    "start": "node server/index.js",
+    "desktop": "npm run build && tauri dev",
+    "dist:mac": "npm run build && tauri build",
+    "mcp": "node mcp/server.js",
+    "test": "node --test server/*.test.js",
+    "typecheck": "tsc --noEmit -p web",
+    "worker": "node worker/worker.js",
+    "tauri": "tauri",
+    "check:desktop": "npm run build && cd src-tauri && AUTODOS_SMOKE=../../checks/desktop.json cargo run"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "qrcode-generator": "^1.5.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.76.0"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The board window, served by the local Autodos server, may call the shell's own commands.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*"
+    ]
+  },
+  "permissions": [
+    "allow-pick-folder",
+    "allow-notify",
+    "allow-set-badge",
+    "allow-open-external",
+    "allow-start-drag",
+    "allow-toggle-maximize"
+  ]
+}

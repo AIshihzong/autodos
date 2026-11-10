@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Autodos</title>
+<style>
+  html,body{margin:0;height:100%;background:#0e0f11;color:#9a9ca3;font:13px -apple-system,BlinkMacSystemFont,sans-serif}
+  body{display:grid;place-items:center;-webkit-user-select:none}
+  main{max-width:420px;text-align:center;padding:24px}
+  h1{font-size:15px;font-weight:600;color:#e6e7ea;margin:0 0 8px}
+  code{background:#1b1d21;padding:2px 6px;border-radius:4px;color:#e6e7ea}
+  .dot{width:8px;height:8px;border-radius:50%;background:#5e6ad2;margin:0 auto 14px;animation:p 1s ease-in-out infinite alternate}
+  @keyframes p{to{opacity:.25}}
+  @media (prefers-color-scheme: light){html,body{background:#fbfbfc;color:#6b6f76}h1{color:#1b1d21}code{background:#eef0f3;color:#1b1d21}}
+</style></head>
+<body><main id="m"><div class="dot"></div><h1>Autodos</h1></main>
+<script>
+  window.autodosFail = (msg) => {
+    document.getElementById('m').innerHTML = '<h1></h1><p></p>';
+    document.querySelector('h1').textContent = msg.title;
+    document.querySelector('p').innerHTML = msg.body;
+  };
+</script></body></html>
