@@ -52,7 +52,8 @@ const clip = (s, n) => (String(s || '').length > n ? String(s).slice(0, n) + '\n
 
 export function leadPrompt(t, project, { allowed, blocks = [], owner = [], others = [], spent = false }, rounds = 0) {
   const gate = t.phase;
-  const last = [...(t.messages || [])].reverse().find((m) => m.role === 'agent');
+  // After a move to this project, what the engineer said before was about another place.
+  const last = [...(t.messages || [])].reverse().find((m) => m.role === 'agent' && !(t.movedAt && m.at < t.movedAt));
   const parts = [
     `You are the development lead of a professional software team working for a customer. The customer brings ideas and problems; your team owns everything technical. An engineer on your team has stopped at a gate. Decide what a good lead would decide, so the customer is only asked about things that are really theirs.
 
@@ -62,6 +63,7 @@ Between two reasonable technical options, pick one and say why. Follow the proje
     memoryBlock(project),
     knowledgeBlock(project),
     `Task #${t.number}: ${t.title}${t.description ? `\n${clip(t.description, 3000)}` : ''}`,
+    t.movedAt ? 'This task was first filed in another project and has started over here; work or messages from before the move do not describe this repository.' : '',
   ];
   if (gate === 'asking') {
     parts.push(`Gate: the engineer asks a question before going on.\nQuestion: ${t.question?.text || ''}${t.question?.options?.length ? `\nOptions:\n${t.question.options.map((o) => `- ${o}`).join('\n')}` : ''}${last ? `\n\nWhat the engineer wrote:\n${clip(last.text, 3000)}` : ''}`);

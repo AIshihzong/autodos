@@ -9,6 +9,7 @@ import { startServer } from './index.js';
 import { splitRequest, labelsFor, analystPrompt, pickProject } from './chief.js';
 import { leadOptions, leadPrompt, parseLead, ownerHits } from './lead.js';
 import { parseConfig } from './autopilot.js';
+import { runtimes } from './runtimes.js';
 
 process.env.AUTODOS_ALLOW_LOCAL_CHANNELS = '1';
 let srv;
@@ -1198,4 +1199,57 @@ test('lead: when its runtime cannot answer it looks again later, and only then t
   await waitFor(async () => (await phaseOf(b.number)) === 'done', 30000);
   assert.ok(fs.existsSync(path.join(repo, 'deploy/b.sh')));
   srv.lead.retryMs = delays;
+});
+
+test('runs: a resumed session is charged for its turn, not its whole history; a usage limit waits and retries by itself', async () => {
+  const repo = mkRepo('repo-cost');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  await call('PATCH', '/settings', { budgetUsd: 3 });
+  const real = runtimes.demo.run;
+  const waits = srv.runner.capacityWaitMs;
+  let total = 0;
+  let refuse = 0;
+  runtimes.demo.run = async (a) => {
+    if (['review', 'chief'].includes(a.kind)) return real(a);
+    if (/Limited/.test(a.title) && refuse-- > 0) throw new Error('Claude AI usage limit reached|1762837200');
+    const r = await real(a);
+    if (!/Costly/.test(a.title)) return r;
+    total += 2; // the CLI reports what the session has cost since it began
+    return { ...r, sessionId: 'sess-1', usage: { ...r.usage, costUsd: total } };
+  };
+  try {
+    const t = await runTodo(p.id, 'Costly work', { 'c.txt': 'c\n' });
+    await waitFor(async () => (await phaseOf(t.number)) === 'review', 30000);
+    await call('POST', `/todos/${t.number}/messages`, { text: 'one more thing' });
+    await waitFor(async () => (await todoOf(t.number)).messages.filter((m) => m.role === 'agent').length >= 2 && (await phaseOf(t.number)) === 'review', 30000);
+    await call('POST', `/todos/${t.number}/messages`, { text: 'and another' });
+    await waitFor(async () => (await todoOf(t.number)).messages.filter((m) => m.role === 'agent').length >= 3 && ['review', 'failed'].includes(await phaseOf(t.number)), 30000);
+    assert.equal(await phaseOf(t.number), 'review', 'the third turn reported $6 in total and still fits a $3 budget per run');
+    const id = (await todoOf(t.number)).id;
+    assert.deepEqual(srv.store.data.runs.filter((x) => x.todoId === id && x.kind !== 'review').map((x) => x.costUsd), [2, 2, 2]);
+    await call('POST', `/todos/${t.number}/action`, { action: 'close' });
+
+    // The runtime is at its limit: the todo waits in the queue and goes on by itself; nobody is asked.
+    srv.runner.capacityWaitMs = [300, 300];
+    refuse = 1;
+    const l = await runTodo(p.id, 'Limited work', { 'l.txt': 'l\n' }).catch(() => null);
+    const { body: l2 } = l ? { body: l } : await call('POST', '/todos', { title: 'Limited work two', projectId: p.id, start: true });
+    const waited = await waitFor(async () => {
+      const x = await todoOf(l2.number);
+      return x.messages.some((m) => m.kind === 'capacity') && x;
+    }, 30000);
+    assert.notEqual(waited.phase, 'failed');
+    await waitFor(async () => (await phaseOf(l2.number)) === 'review', 30000);
+    assert.ok(!(await todoOf(l2.number)).capacity);
+    await call('POST', `/todos/${l2.number}/action`, { action: 'close' });
+    // It never lifts: after the waits it fails like any other error.
+    refuse = 99;
+    const { body: n } = await call('POST', '/todos', { title: 'Limited forever', projectId: p.id, start: true });
+    await waitFor(async () => (await phaseOf(n.number)) === 'failed', 30000);
+    assert.equal((await todoOf(n.number)).messages.filter((m) => m.kind === 'capacity').length, 2);
+    await call('POST', `/todos/${n.number}/action`, { action: 'close' });
+  } finally {
+    runtimes.demo.run = real;
+    srv.runner.capacityWaitMs = waits;
+  }
 });

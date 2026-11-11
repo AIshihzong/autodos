@@ -39,7 +39,7 @@ Between an agent's build turn and your Review, every change goes through:
 
 1. **Checks** — the commands listed under Projects → *project* → Checks (Detect suggests them from `package.json`, `Cargo.toml`, `go.mod`, pytest config). If any fail, the author gets the output and a fix round, up to *Automatic fix rounds* (Settings), and may not weaken tests to pass. Results and output are shown on the todo.
 2. **AI review** — a second agent reads the diff read-only and returns findings with severity. With the reviewer on *Use default*, Autodos picks a different runtime than the author (Claude Code ↔ Codex). Obvious, safe fixes go back to the author automatically, then checks run again; the rest are listed for you.
-3. **Budget** — each run has a time and dollar limit (Settings → Budget per run). Past either, the todo stops in Failed and says why; Retry or a reply starts a fresh budget.
+3. **Budget** — each run has a time and dollar limit (Settings → Budget per run). Past either, the todo stops in Failed and says why; Retry or a reply starts a fresh budget. A turn that continues an earlier Claude session is charged for that turn only (the CLI reports the session's running total). With a subscription login the dollar figure is the CLI's estimate at API prices, not a charge. When the runtime answers that it is at its usage or rate limit, the todo does not fail: it waits in the queue and tries again by itself after 5, 15, 30 and 60 minutes.
 
 **Project memory** (Projects → *project* → Memory): decisions you made and things you declined. Agents and the Lead read it before every turn. Any message you wrote in a todo can be saved there with one click.
 
