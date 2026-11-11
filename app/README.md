@@ -18,6 +18,10 @@ npm run check:desktop             # open the desktop app, check the board loaded
 
 Data lives in `~/.autodos/` (`db.json`, per-todo `worktrees/`, `scratch/` for todos without a project). Set `AUTODOS_DATA` to use another folder, `PORT` to change the web port.
 
+### Keeping the Mac awake
+
+On macOS, Autodos keeps the machine from going to sleep for as long as the team has something running, queued, waiting for a usage limit or with the lead (`caffeinate -i`, tied to the server process), and lets it sleep again when there is nothing left. The display can still turn off, and closing a laptop's lid still sleeps it. Settings, "Keep this Mac awake while the team works", turns it off.
+
 ### Keeping it up to date
 
 Run from a git checkout, Autodos can update itself: Settings, "Keep Autodos up to date by itself" (or `AUTODOS_SELF_UPDATE=1`). It is off until you turn it on, because it means running whatever the branch's remote has. Every ten minutes it looks at the remote of the branch it is on and takes only a plain fast-forward of a clean checkout; local commits or edited files mean it leaves the checkout alone and says so in Settings.
@@ -193,7 +197,7 @@ The server binds to `127.0.0.1` only, and refuses write requests that come from 
 ## Layout
 
 ```
-server/   Node HTTP API, SSE events, todo lifecycle (runner.js), Lead (chief.js), runtimes, git worktrees, unattended projects (autopilot.js), self-update (selfupdate.js, handover.js)
+server/   Node HTTP API, SSE events, todo lifecycle (runner.js), Lead (chief.js), runtimes, git worktrees, unattended projects (autopilot.js), self-update (selfupdate.js, handover.js), keeping the Mac awake (awake.js)
 web/      React + Vite UI (board, Lead chat, todo drawer, ⌘K palette, agents, projects, schedules, usage, settings; EN/中文; light/dark)
 src-tauri/  Tauri shell: starts or reuses the server, folder picker, notifications, dock badge, outside links
 mcp/      stdio MCP server

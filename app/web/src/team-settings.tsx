@@ -421,6 +421,13 @@ export function SettingsPage({ state, theme, setTheme, lang, setLang, font, setF
                 <Switch label={t.worktrees} checked={s.useWorktrees} onChange={(v) => set({ useWorktrees: v })} />
               </Row>
             </Group>
+            {/Mac/.test(navigator.userAgent) && (
+              <Group>
+                <Row label={t.keepAwake} sub={t.keepAwakeSub}>
+                  <Switch label={t.keepAwake} checked={s.keepAwake !== false} onChange={(v) => set({ keepAwake: v })} />
+                </Row>
+              </Group>
+            )}
             <SelfUpdateGroup on={!!s.selfUpdate} set={(v) => set({ selfUpdate: v })} />
           </>
         )}

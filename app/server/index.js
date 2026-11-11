@@ -10,6 +10,7 @@ import { Chief, newTodo, pickAgent, labelsFor } from './chief.js';
 import { Lead } from './lead.js';
 import { Watch } from './watch.js';
 import { SelfUpdate } from './selfupdate.js';
+import { KeepAwake } from './awake.js';
 import { spawn } from 'node:child_process';
 import { detectRuntimes } from './runtimes.js';
 import { diagnose, fix as fixCheck, fixJobs } from './doctor.js';
@@ -42,6 +43,7 @@ export function createApp({ dataDir } = {}) {
   const lead = new Lead(store, runner);
   const chief = new Chief(store, runner);
   const watch = new Watch(store, runner, chief);
+  const awake = new KeepAwake(store);
   const update = new SelfUpdate({
     store,
     idle: () => !runner.running.size && !runner.landings && !lead.deciding.size && !chief.busy && !store.data.todos.some((t) => ['merging', 'shipping'].includes(t.phase) || t.completing),
@@ -727,9 +729,10 @@ export function createApp({ dataDir } = {}) {
     workers.close();
     rules.close();
     update.close();
+    awake.close();
     store.flush();
   });
-  return { server, store, runner, chief, lead, watch, update, feishu, delivery, previews, workers, rules, autopilot };
+  return { server, store, runner, chief, lead, watch, update, awake, feishu, delivery, previews, workers, rules, autopilot };
 }
 
 export function startServer({ port = Number(process.env.PORT) || 4747, host = '127.0.0.1', dataDir } = {}) {

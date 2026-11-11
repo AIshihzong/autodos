@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { findUpdate, install, settle, rollback, discard, SelfUpdate } from './selfupdate.js';
+import { KeepAwake } from './awake.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'autodos-update-test-'));
 const sh = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -157,4 +158,39 @@ test('self-update: waits for a quiet moment without starting new work, gives up 
   } finally {
     up.close();
   }
+});
+
+test('keep awake: a Mac with work stays awake, and is let go when the work is done or the setting is off', () => {
+  const store = { data: { settings: {}, todos: [{ phase: 'review' }] } };
+  const started = [];
+  const start = () => {
+    const c = { killed: false, kill() { this.killed = true; }, once() {} };
+    started.push(c);
+    return c;
+  };
+  const a = new KeepAwake(store, { platform: 'darwin', start, every: 1e9 });
+  try {
+    assert.equal(a.check(), false, 'waiting for the person is not work');
+    store.data.todos.push({ phase: 'queued', capacity: { until: '2099-01-01T00:00:00Z' } });
+    assert.equal(a.check(), true, 'waiting for a usage limit to lift is');
+    assert.equal(a.check(), true);
+    assert.equal(started.length, 1, 'one assertion at a time');
+    store.data.todos[1].phase = 'review';
+    store.data.todos[1].leadPending = { at: 'x' };
+    assert.equal(a.check(), true, 'the lead looking at it is');
+    delete store.data.todos[1].leadPending;
+    assert.equal(a.check(), false);
+    assert.ok(started[0].killed);
+    store.data.todos[1].phase = 'building';
+    store.data.settings.keepAwake = false;
+    assert.equal(a.check(), false, 'switched off');
+    store.data.settings.keepAwake = true;
+    assert.equal(a.check(), true);
+  } finally {
+    a.close();
+  }
+  assert.ok(started.at(-1).killed);
+  const linux = new KeepAwake(store, { platform: 'linux', start, every: 1e9 });
+  assert.equal(linux.check(), false, 'only on macOS');
+  linux.close();
 });
