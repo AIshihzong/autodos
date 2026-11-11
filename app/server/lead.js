@@ -31,7 +31,11 @@ export function leadOptions(t, project, settings = {}, others = []) {
   const move = others.length ? ['move'] : [];
   if (gate === 'asking') return { allowed: ['answer', ...move, 'escalate'], blocks: [], others };
   if (gate === 'confirm') return { allowed: ['approve', 'send_back', ...move, 'escalate'], blocks: [], others };
-  if (gate === 'failed') return { allowed: ['retry', ...move, 'escalate'], blocks: [], others };
+  if (gate === 'failed') {
+    // Money is the customer's: after a budget stop the lead may grant one more budget, never a second one.
+    const spent = /^Budget reached/.test(t.error || '') && (t.budgetExtensions || 0) >= 1;
+    return { allowed: spent ? [...move, 'escalate'] : ['retry', ...move, 'escalate'], blocks: [], others, spent };
+  }
   // Review: approving lands the change, so the facts have to allow it whatever the lead thinks.
   const blocks = [];
   const owner = ownerHits(t.files, project?.lead?.ownerPaths);
@@ -46,7 +50,7 @@ export function leadOptions(t, project, settings = {}, others = []) {
 
 const clip = (s, n) => (String(s || '').length > n ? String(s).slice(0, n) + '\n…(cut)' : String(s || ''));
 
-export function leadPrompt(t, project, { allowed, blocks = [], owner = [], others = [] }, rounds = 0) {
+export function leadPrompt(t, project, { allowed, blocks = [], owner = [], others = [], spent = false }, rounds = 0) {
   const gate = t.phase;
   const last = [...(t.messages || [])].reverse().find((m) => m.role === 'agent');
   const parts = [
@@ -85,6 +89,7 @@ Between two reasonable technical options, pick one and say why. Follow the proje
         .join('\n\n'),
     );
   }
+  if (gate === 'failed' && /^Budget reached/.test(t.error || '')) parts.push(spent ? 'This task already got one extra budget from you and ran out again. More spending is the customer\'s call: pass it on, with what has been done so far and what is left.' : 'It stopped at the spending limit. You may grant one more budget ("retry") when the work is clearly on track and close to done; otherwise pass it on.');
   if (blocks.length) parts.push(`You cannot accept it as it stands, because ${blocks.join('; ')}. Send it back with what to fix, or pass it on.`);
   if (rounds) parts.push(`You have already sent this task back or answered it ${rounds} time${rounds > 1 ? 's' : ''}. If it keeps coming back with the same problem, change your instructions or pass it on.`);
   const verbs = {
@@ -315,6 +320,7 @@ export class Lead {
     // answer, send_back, retry: the lead's words go to the engineer the way the person's would.
     say(`The lead ${out.decision === 'answer' ? 'answered' : out.decision === 'retry' ? 'asked for another try' : 'sent it back'}${out.why ? `: ${out.why}` : '.'}`);
     log(out.decision);
+    if (out.decision === 'retry' && /^Budget reached/.test(t.error || '')) t.budgetExtensions = (t.budgetExtensions || 0) + 1;
     r.reply(t, gate === 'asking' ? `Answer to your question: ${out.text}` : out.text, { lead: true });
   }
 }

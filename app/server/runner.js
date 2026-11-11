@@ -90,6 +90,7 @@ export class Runner extends EventEmitter {
     if (mode) t.mode = mode;
     t.error = null;
     t.leadRounds = 0;
+    t.budgetExtensions = 0; // started by the person (or anew): the lead may again grant one extra budget
     this.renewBudget(t);
     this.setPhase(t, 'queued');
     this.store.changed();

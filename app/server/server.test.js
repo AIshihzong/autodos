@@ -1155,6 +1155,13 @@ test('lead: a todo that belongs to another project can be moved there, never to 
   assert.match(prompt, /"move"/);
   assert.equal(parseLead('{"decision":"move","project":"Canvas app","why":"the code is there"}', o.allowed).project, 'Canvas app');
   assert.equal(parseLead('{"decision":"move","why":"somewhere else"}', o.allowed), null);
+  // A budget stop: one more budget is the lead's to give, a second one is the customer's.
+  const broke = { phase: 'failed', number: 2, title: 'y', error: 'Budget reached for this run: $5.99 of $3.00', messages: [] };
+  assert.deepEqual(leadOptions(broke, here, {}, []).allowed, ['retry', 'escalate']);
+  assert.match(leadPrompt(broke, here, leadOptions(broke, here, {}, []), 0), /You may grant one more budget/);
+  const again = leadOptions({ ...broke, budgetExtensions: 1 }, here, {}, []);
+  assert.deepEqual(again.allowed, ['escalate']);
+  assert.match(leadPrompt({ ...broke, budgetExtensions: 1 }, here, again, 0), /More spending is the customer's call/);
 });
 
 test('lead: when its runtime cannot answer it looks again later, and only then tells the person; the todo can be handed back', async () => {
