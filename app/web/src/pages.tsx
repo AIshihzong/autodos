@@ -157,6 +157,7 @@ function ChecksEditor({ project }: { project: Project }) {
     leadDecide: !!project.lead?.decide,
     ownerPaths: (project.lead?.ownerPaths || []).join('\n'),
     analyst: !!project.analyst,
+    confirmRequirements: project.confirmRequirements !== false,
     knowledge: (project.knowledge || []).join('\n'),
     backlogFile: project.backlog?.file || '',
     backlogOpen: project.backlog?.maxOpen || 1,
@@ -183,6 +184,7 @@ function ChecksEditor({ project }: { project: Project }) {
     protectedPaths: lines(v.protectedPaths),
     lead: { ...(project.lead || {}), decide: v.leadDecide, ownerPaths: lines(v.ownerPaths) },
     analyst: v.analyst,
+    confirmRequirements: v.confirmRequirements,
     knowledge: lines(v.knowledge),
     backlog: v.backlogFile.trim() ? { ...(project.backlog || {}), file: v.backlogFile.trim(), maxOpen: v.backlogOpen } : null,
     upstream: v.upstreamUrl.trim() ? { ...(project.upstream || {}), url: v.upstreamUrl.trim(), branch: v.upstreamBranch.trim() || 'main', every: v.upstreamEvery } : null,
@@ -245,6 +247,11 @@ function ChecksEditor({ project }: { project: Project }) {
         <Row label={t.analystOn} sub={t.analystHint}>
           <Switch checked={v.analyst} onChange={(x) => setV({ ...v, analyst: x })} label={t.analystOn} />
         </Row>
+        {v.analyst && (
+          <Row label={t.confirmReqOn} sub={t.confirmReqHint}>
+            <Switch checked={v.confirmRequirements} onChange={(x) => setV({ ...v, confirmRequirements: x })} label={t.confirmReqOn} />
+          </Row>
+        )}
         <div className="g-row stack">
           <label className="g-label">
             <span>{t.knowledge}</span>

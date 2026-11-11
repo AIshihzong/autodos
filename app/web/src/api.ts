@@ -35,11 +35,12 @@ export interface Project {
   id: string; name: string; path: string; git?: boolean; checks?: string[]; preview?: string; delivery?: 'merge' | 'pr'; memory?: { decisions: MemoryItem[]; declined: MemoryItem[] };
   baseBranch?: string; branchTemplate?: string; prTitle?: string; setup?: string; pushBase?: boolean; protectedPaths?: string[];
   autopilot?: { accept: boolean; review?: boolean; maxFiles?: number } | null; upstream?: Upstream | null;
-  lead?: { decide: boolean; ownerPaths?: string[]; maxRounds?: number } | null; analyst?: boolean; knowledge?: string[]; leadLog?: { at: string; todo: number; title: string; gate: string; decision: string; why: string }[];
+  lead?: { decide: boolean; ownerPaths?: string[]; maxRounds?: number } | null; analyst?: boolean; confirmRequirements?: boolean; knowledge?: string[]; leadLog?: { at: string; todo: number; title: string; gate: string; decision: string; why: string }[];
   backlog?: { file: string; every?: number; maxOpen?: number; left?: number; lastError?: string | null } | null; configAt?: string; configStale?: boolean; pullError?: string | null;
 }
 export interface Schedule { id: string; title: string; description: string; projectId?: string | null; agentId?: string | null; everyMinutes: number; enabled: boolean; mode: 'plan' | 'run'; nextAt?: string; lastAt?: string }
-export interface ChiefMessage { id: string; role: 'user' | 'chief'; text: string; at: string; todoIds?: string[]; error?: boolean; topicId?: string }
+export interface ChiefMessage { id: string; role: 'user' | 'chief'; text: string; at: string; todoIds?: string[]; error?: boolean; topicId?: string; requirementId?: string }
+export interface Requirement { id: string; number: number; projectId?: string | null; topicId?: string; title: string; problem?: string; scope?: string[]; outOfScope?: string[]; acceptance?: string[]; assumptions?: string[]; todos?: { title: string; agent?: string }[]; todoIds?: string[]; status: 'discussing' | 'confirm' | 'building' | 'done' | 'dropped'; createdAt: string; updatedAt: string }
 export interface Topic { id: string; title: string; archived: boolean; createdAt: string; updatedAt: string }
 export interface FileEntry { name: string; dir: boolean; path: string }
 export interface Commit { hash: string; author: string; date: string; subject: string }
@@ -47,7 +48,7 @@ export interface Run { id: string; todoId: string; number: number; agentId?: str
 export interface Runtime { id: string; name: string; available: boolean; version: string }
 export interface Settings { concurrency: number; defaultRuntime: string; chiefRuntime: string; claudePermissionMode: string; codexSandbox?: string; useWorktrees: boolean; autoStart: boolean; planFirst: boolean; verify: boolean; verifyAttempts: number; reviewer: string; reviewAutoFix: boolean; budgetMinutes: number; budgetUsd: number; publicUrl?: string; delegateDepth: number; delegateChildren: number; steer?: boolean }
 export interface State {
-  settings: Settings; projects: Project[]; agents: Agent[]; todos: Todo[]; chief: ChiefMessage[]; chiefBusy: boolean; topics: Topic[]; mcpPath: string;
+  settings: Settings; projects: Project[]; agents: Agent[]; todos: Todo[]; chief: ChiefMessage[]; requirements?: Requirement[]; chiefBusy: boolean; topics: Topic[]; mcpPath: string;
   workers: Worker[]; pairings: { code: string; words: string[]; host: string; name: string }[]; previews: { todoId: string; url: string; ready: boolean }[]; rules: Rule[]; sources: Source[]; events: EventRec[]; channels: Channel[]; runs: Run[]; runtimes: Runtime[]; dataDir: string; feishu: Feishu;
 }
 
@@ -188,6 +189,8 @@ export function useDoctor(watching = false) {
 export const actions = {
   fixCheck: (id: CheckId) => api<FixResult>('POST', `/doctor/${id}/fix`, {}),
   say: (text: string, projectId?: string | null, topicId?: string | null) => api('POST', '/chief', { text, projectId, topicId }),
+  confirmRequirement: (id: string) => api('POST', `/requirements/${id}/confirm`, {}),
+  dropRequirement: (id: string) => api('POST', `/requirements/${id}/drop`, {}),
   newTopic: () => api<Topic>('POST', '/topics', {}),
   updateTopic: (id: string, patch: Partial<Topic>) => api<Topic>('PATCH', `/topics/${id}`, patch),
   deleteTopic: (id: string) => api('DELETE', `/topics/${id}`),

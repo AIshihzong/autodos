@@ -91,6 +91,9 @@ export function parseConfig(text) {
       case 'analyst':
         out.analyst = !!v;
         break;
+      case 'confirmRequirements':
+        out.confirmRequirements = v !== false;
+        break;
       case 'knowledge': {
         const files = list(v, 40);
         const bad = files.filter((f) => !okFile(f.replace(/\/$/, '')));
@@ -400,7 +403,7 @@ export class Autopilot {
     const { text, sha, from } = await this.#configText(project);
     const { config: c, warnings } = parseConfig(text);
     const d = this.store.data;
-    for (const k of ['baseBranch', 'branchTemplate', 'prTitle', 'setup', 'preview', 'checks', 'protectedPaths', 'delivery', 'pushBase', 'autopilot', 'lead', 'analyst', 'knowledge']) if (k in c) project[k] = c[k];
+    for (const k of ['baseBranch', 'branchTemplate', 'prTitle', 'setup', 'preview', 'checks', 'protectedPaths', 'delivery', 'pushBase', 'autopilot', 'lead', 'analyst', 'confirmRequirements', 'knowledge']) if (k in c) project[k] = c[k];
     if ('upstream' in c) project.upstream = c.upstream ? { ...(project.upstream?.url === c.upstream.url ? project.upstream : {}), ...c.upstream } : null;
     if ('backlog' in c) project.backlog = c.backlog ? { ...(project.backlog || {}), ...c.backlog } : null;
     if (c.memory) {

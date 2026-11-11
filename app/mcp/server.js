@@ -68,7 +68,7 @@ const tools = [
     run: async ({ text }) => {
       // An agent at work splits work with create_todo (bounded); asking the lead would bypass the limits.
       if (process.env.AUTODOS_TODO) throw new Error('Inside a todo, use create_todo for sub-tasks.');
-      await api('POST', '/chief', { text });
+      await api('POST', '/chief', { text, via: 'mcp' });
       return { ok: true, note: 'The lead is filing todos; call list_todos to see them.' };
     },
   },

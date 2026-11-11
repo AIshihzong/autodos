@@ -7,6 +7,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { startServer } from './index.js';
 import { splitRequest, labelsFor, analystPrompt, pickProject } from './chief.js';
+import { isConfirm, isDrop, requirementText } from './requirements.js';
 import { leadOptions, leadPrompt, parseLead, ownerHits } from './lead.js';
 import { parseConfig } from './autopilot.js';
 import { runtimes } from './runtimes.js';
@@ -992,7 +993,12 @@ test('analyst: the customer is asked about the product, never about the plumbing
   assert.match(prompt, /Customer: Uploads fail after a break/);
   assert.match(prompt, /You: After how long\?/);
   assert.match(prompt, /Never ask the customer about code, repositories, branches, environments/);
-  assert.match(prompt, /at most 3 acceptance checks/);
+  assert.match(prompt, /at most 3 things a person can see happen/);
+  assert.match(prompt, /Never offer to do more/);
+  assert.doesNotMatch(prompt, /already spoken/);
+  const later = analystPrompt({ agents: '', project: {}, history: [{ role: 'chief', text: 'a' }, { role: 'chief', text: 'b' }, { role: 'chief', text: 'c' }], text: 'd', card: { title: 'Dark mode', scope: ['Settings switch'] } });
+  assert.match(later, /already spoken 3 times/);
+  assert.match(later, /Dark mode/);
   const { config, warnings } = parseConfig(JSON.stringify({ lead: { decide: true, ownerPaths: ['deploy/*'] }, analyst: true, knowledge: ['docs/BRIEF.md', '../secrets', 'tasks/'] }));
   assert.deepEqual(config.lead, { decide: true, ownerPaths: ['deploy/*'], maxRounds: 6 });
   assert.equal(config.analyst, true);
@@ -1251,5 +1257,89 @@ test('runs: a resumed session is charged for its turn, not its whole history; a 
   } finally {
     runtimes.demo.run = real;
     srv.runner.capacityWaitMs = waits;
+  }
+});
+
+test('requirements: yes and no in the customer\'s words; a longer reply is a change', () => {
+  for (const x of ['确认', '可以', '好的，开工', '行', 'OK', 'go ahead', '没问题！']) assert.ok(isConfirm(x), x);
+  for (const x of ['可以，但是按钮放右边', '确认一下这个按钮在哪', 'no', '']) assert.ok(!isConfirm(x), x);
+  assert.ok(isDrop('算了'));
+  assert.ok(!isDrop('确认'));
+  const text = requirementText({ number: 4, title: '暗色模式', problem: '晚上太亮', scope: ['设置里加开关'], outOfScope: ['自动跟随系统'], acceptance: ['打开开关后整个界面变暗'], assumptions: ['默认关闭'], todos: [{ title: '加暗色主题', agent: 'Dev' }] }, () => 'Dev');
+  for (const x of ['需求 R4 · 待你确认', '这次不做', '自动跟随系统', '1. 打开开关后整个界面变暗', '加暗色主题 → Dev', '回复“确认”就开工']) assert.ok(text.includes(x), x);
+});
+
+test('requirements: nothing is built before the customer confirms the card; small fixes start at once', async () => {
+  const repo = mkRepo('repo-req');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  const project = srv.store.project(p.id);
+  project.analyst = true;
+  const { body: tp } = await call('POST', '/topics', { title: 'req' });
+  const agent = srv.store.data.agents[0].name;
+  let answer;
+  const prompts = [];
+  srv.chief.analyze = async (prompt) => (prompts.push(prompt), JSON.stringify(answer));
+  const card = (title, extra = {}) => ({ reply: '整理好了，请看下面的需求卡。', small: false, requirement: { title, problem: '晚上看着刺眼', scope: ['设置里加开关'], outOfScope: ['跟随系统'], acceptance: ['打开开关后界面变暗'], assumptions: ['默认关闭'], ...extra }, todos: [{ title: `Build ${title}`, description: 'x', agent }, { title: `Docs for ${title}`, description: 'y', agent }] });
+  const mine = () => srv.store.data.todos.filter((t) => t.projectId === p.id);
+  const req = () => srv.store.data.requirements.find((r) => r.topicId === tp.id && r.status !== 'dropped');
+  const lastSaid = () => srv.store.data.chief.filter((m) => m.topicId === tp.id && m.role === 'chief').pop();
+  const say = async (text, via) => {
+    const n = srv.store.data.chief.filter((m) => m.topicId === tp.id && m.role === 'chief').length;
+    await call('POST', '/chief', { text, projectId: p.id, topicId: tp.id, via });
+    await waitFor(() => srv.store.data.chief.filter((m) => m.topicId === tp.id && m.role === 'chief').length > n && !srv.chief.busy);
+  };
+  try {
+    answer = card('Dark mode');
+    await say('想要一个暗色模式');
+    assert.equal(mine().length, 0, 'no todo before the customer says yes');
+    assert.equal(req().status, 'confirm');
+    assert.equal(lastSaid().requirementId, req().id);
+    assert.match(lastSaid().text, /待你确认/);
+
+    // A change goes back to the analyst with the card; it waits again.
+    answer = card('Dark mode v2', { scope: ['设置里加开关', '记住上次的选择'] });
+    await say('还要记住我上次选的');
+    assert.match(prompts.at(-1), /requirement card the customer is looking at now/);
+    assert.equal(req().title, 'Dark mode v2');
+    assert.equal(req().revisions, 1);
+    assert.equal(mine().length, 0);
+
+    // Someone else's tool saying yes for them does not count.
+    await say('确认', 'mcp');
+    assert.equal(req().status, 'confirm');
+    assert.equal(mine().length, 0);
+
+    // The customer says yes: the planned todos are filed, carry the card, and start.
+    await say('确认');
+    const r = req();
+    assert.equal(r.status, 'building');
+    assert.equal(mine().length, 2);
+    assert.ok(mine().every((t) => t.requirementId === r.id && /R\d+/.test(t.description) && /打开开关后界面变暗/.test(t.description)));
+    assert.match(lastSaid().text, /已确认，开工/);
+    assert.equal((await call("POST", `/requirements/${r.id}/confirm`, {})).status, 400, 'a card is confirmed once');
+    for (const t of mine()) await call('POST', `/todos/${t.number}/action`, { action: 'close' });
+    await waitFor(() => r.status !== 'building');
+
+    // A small fix needs no card.
+    answer = { reply: '这是小改，已经直接开工。', small: true, requirement: null, todos: [{ title: 'Fix typo on the about page', description: 'z', agent }] };
+    await say('关于页面有个错别字');
+    await waitFor(() => mine().some((t) => t.title === 'Fix typo on the about page'));
+    assert.equal(srv.store.data.requirements.filter((x) => x.topicId === tp.id && x.status === 'confirm').length, 0);
+
+    // A card from the board can be dropped; and a project can turn the card off.
+    answer = card('Export');
+    await say('想要导出功能');
+    const ex = req();
+    assert.equal(ex.status, 'confirm');
+    assert.equal((await call("POST", `/requirements/R${ex.number}/drop`, {})).status, 200);
+    assert.equal(ex.status, 'dropped');
+    assert.ok(!mine().some((t) => /Export/.test(t.title)));
+    project.confirmRequirements = false;
+    await say('想要导出功能');
+    await waitFor(() => mine().some((t) => /Export/.test(t.title)));
+    for (const t of mine()) if (!['done', 'closed'].includes(t.phase)) await call('POST', `/todos/${t.number}/action`, { action: 'close' });
+  } finally {
+    srv.chief.analyze = null;
+    project.analyst = false;
   }
 });

@@ -192,6 +192,21 @@ export function Chat({ state, projectId, onOpen, onGo }: { state: State; project
                 </div>
               );
             })}
+            {(() => {
+              // A requirement card that still waits for the customer: they say yes or drop it here.
+              const r = m.requirementId && state.requirements?.find((x) => x.id === m.requirementId);
+              if (!r || r.status !== 'confirm' || state.chief.some((x) => x.requirementId === r.id && x.at > m.at)) return null;
+              return (
+                <div className="req-actions">
+                  <button className="btn small" onClick={() => actions.confirmRequirement(r.id).catch((e) => setError(e.message))}>
+                    {t.reqConfirm}
+                  </button>
+                  <button className="btn small ghost" onClick={() => actions.dropRequirement(r.id).catch((e) => setError(e.message))}>
+                    {t.reqDrop}
+                  </button>
+                </div>
+              );
+            })()}
             <time>{new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
           </div>
         ))}

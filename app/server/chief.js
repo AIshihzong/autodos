@@ -7,6 +7,7 @@ import { knowledgeBlock } from './lead.js';
 import { refOf } from './git.js';
 import { nextRun } from './rules.js';
 import { retroStats, retroText } from './retro.js';
+import { isConfirm, isDrop, normalizeRequirement, upsertRequirement, pendingRequirement, requirementText, todoDescription, syncRequirement } from './requirements.js';
 
 const zh = (s) => /[一-鿿]/.test(s);
 
@@ -118,9 +119,13 @@ function extractJson(text) {
  * It knows the product from the project's knowledge files and the repository, talks about ideas and problems
  * in the customer's terms, never asks them technical questions, and files work once it is clear enough to build.
  */
-export function analystPrompt({ agents, project, history, text }) {
+export function analystPrompt({ agents, project, history, text, card }) {
   const said = (history || []).map((m) => `${m.role === 'user' ? 'Customer' : 'You'}: ${String(m.text).slice(0, 1500)}`).join('\n\n');
-  return `You are the requirements analyst of a professional software team, and you know this product in depth. The customer brings ideas and problems to you. Your job is to understand what they want, connect it to what already exists, and turn it into requirements the team can build without coming back to them.
+  const rounds = (history || []).filter((m) => m.role !== 'user').length;
+  const open = card
+    ? `The requirement card the customer is looking at now (they have not confirmed it; their new message is about this card unless it plainly is something else):\n${JSON.stringify({ title: card.title, problem: card.problem, scope: card.scope, outOfScope: card.outOfScope, acceptance: card.acceptance, assumptions: card.assumptions, todos: (card.todos || []).map((x) => x.title) }, null, 1)}\n\n`
+    : '';
+  return `You are the requirements analyst of a professional software team, and you know this product in depth. The customer brings ideas and problems to you. Your job is to understand what they want, connect it to what already exists, and agree with them on a requirement the team can build without coming back to them. Nothing is built until the customer has confirmed the requirement, so a clear card matters more than speed.
 
 Before you answer, read what you need: you are in the project's repository with read access. Do not change any files.
 ${knowledgeBlock(project) || 'Look through the repository (README, docs, task notes) for what the product is and what is already decided.'}
@@ -128,19 +133,25 @@ ${knowledgeBlock(project) || 'Look through the repository (README, docs, task no
 ${memoryBlock(project) ? memoryBlock(project) + '\n\n' : ''}The team that will build it (the lead settles everything technical with them; you only pick who starts):
 ${agents}
 
-${said ? `Conversation so far:\n${said}\n\n` : ''}The customer's new message:
+${said ? `Conversation so far:\n${said}\n\n` : ''}${open}The customer's new message:
 ${text}
 
 How to respond:
-- A question about the product or the project: answer it from what you read, briefly, and return "todos": [].
+- A question about the product or the project: answer it from what you read, briefly. Return "small": false, "requirement": null, "todos": [].
 - An idea or a problem: say back in one or two sentences what you understood. Relate it to requirements, decisions or known problems that already exist (name their ids) and say so if it repeats or contradicts one.
-- Never ask the customer about code, repositories, branches, environments, servers, tooling, test methods or who on the team does what: find it out yourself or leave it to the lead as an open technical question.
-- Ask only what the customer alone can know (who it is for, what they should see happen, what matters more), at most 2 questions in one reply, each with the answer you would assume so they can simply say yes. If nothing essential is open, do not ask; go ahead with sensible assumptions and state them.
-- Once it is clear enough to build, return 1-6 todos that can run in parallel. Keep the customer's own requirement id at the start of a title when there is one. Each description holds, in the customer's language: the problem in their words; what is in scope and what is not; at most 3 acceptance checks, each something a person can see happen (not an implementation detail); related requirement ids; open technical questions for the lead.
-- While you still need an answer from the customer, return "todos": [] and put your questions in "reply".
+- Find out yourself whatever the repository or the project knowledge can tell you. Never ask the customer about code, repositories, branches, environments, servers, tooling, test methods or who on the team does what: leave such points to the lead as open technical questions.
+- Ask only what the customer alone can know (who it is for, what they should see happen, what matters more), at most 2 questions in one reply, each about something they actually said, each with the answer you would assume so they can simply say yes.
+- Stay inside what they asked for. Never offer to do more ("shall we also…"). Related things you noticed, or new wishes that come up in their answers, go under "outOfScope" with a note that they can be raised as a requirement of their own.
+- Split what is still open into two kinds: what blocks the work (only the customer can settle it and the result would differ) and what does not (decide it with a sensible assumption and list the assumption). While something blocks, put your questions in "reply" and return "requirement": null, "todos": [].${rounds >= 3 ? `\n- You have already spoken ${rounds} times in this conversation: unless something truly blocks the work, settle the rest with assumptions and write the requirement now.` : ''}
+- When nothing blocks, decide the size:
+  - "small": true only for a fix the customer could not have meant two ways: a wording or typo change, one plainly broken thing to make work as it already should, a tiny visual adjustment. One todo, no requirement card; it starts at once and your reply says it is a small fix that has been started.
+  - Everything else is "small": false: write the requirement card and the planned todos. They do not start until the customer confirms the card; your reply says in one sentence that the card below is ready for them to check (the card itself is shown to them separately, so do not repeat it).
+- If an open card is shown above and the customer asks for changes, return the revised card in full (it waits for them again). If they raise something unrelated, leave the card as it is and treat the message on its own.
+- Requirement card fields, in the customer's language and plain words: "title" (keep their own requirement id at the start when there is one), "problem" (the problem in their words), "scope" (what this delivers, 1-5 points), "outOfScope" (what it deliberately does not do), "acceptance" (at most 3 things a person can see happen when it is done, not implementation details), "assumptions" (what you decided for them), "refs" (related requirement ids).
+- Todos: 1-6 that can run in parallel. Each description holds what this part delivers, its acceptance checks, and open technical questions for the lead.
 
 Answer with JSON only, no prose and no code fence:
-{"reply": "what you say to the customer, in the language they wrote in, plain words, no technical terms", "todos": [{"title": "imperative, under 80 chars", "description": "as described above", "agent": "exact teammate name", "labels": ["feature"|"bug"|"infra"|"docs"|...]}]}`;
+{"reply": "what you say to the customer, in the language they wrote in, plain words, no technical terms", "small": false, "requirement": {"title": "", "problem": "", "scope": [], "outOfScope": [], "acceptance": [], "assumptions": [], "refs": []} or null, "todos": [{"title": "imperative, under 80 chars", "description": "as described above", "agent": "exact teammate name", "labels": ["feature"|"bug"|"infra"|"docs"|...]}]}`;
 }
 
 export class Chief {
@@ -149,7 +160,11 @@ export class Chief {
     this.runner = runner;
     this.busy = false;
     this.listeners = []; // called with every message the lead says (Feishu forwards them)
-    runner.on('phase', (t, from) => this.#onPhase(t, from));
+    this.analyze = null; // optional stand-in for the analyst's runtime call: (prompt, project) => text
+    runner.on('phase', (t, from) => {
+      this.#onPhase(t, from);
+      this.#onRequirement(t);
+    });
   }
 
   /** The topic a message belongs to: the given one, else the newest open topic (created if none). */
@@ -176,7 +191,7 @@ export class Chief {
   }
 
   /** canApprove: false for people other than the owner (e.g. Feishu group members): they can ask, not merge or schedule. */
-  async handle(text, { projectId, topicId, canApprove = true } = {}) {
+  async handle(text, { projectId, topicId, canApprove = true, canConfirm = true } = {}) {
     const d = this.store.data;
     const tp = this.topic(topicId);
     if (!tp.title) tp.title = text.replace(/\s+/g, ' ').slice(0, 48);
@@ -193,6 +208,15 @@ export class Chief {
     const cn = zh(text);
     const say = (msg, extra = {}) => this.say(msg, { ...extra, topicId });
     const where = chosen && project && d.projects.length > 1 ? (cn ? `（项目：${project.name}）` : ` (project: ${project.name})`) : '';
+
+    // A requirement card waits for the customer in this conversation: a yes starts the work, a no drops it,
+    // anything else is a change they want (it goes back to the analyst below). Only the customer decides.
+    const card = pendingRequirement(this.store, topicId);
+    if (card && (isConfirm(text) || isDrop(text))) {
+      if (!canApprove || !canConfirm) return say(cn ? `需求 R${card.number} 要由负责人确认。` : `Requirement R${card.number} has to be confirmed by the owner.`);
+      if (isDrop(text)) return this.dropRequirement(card);
+      return this.confirmRequirement(card);
+    }
 
     if (/^(weekly )?retro(spective)?\b|^(周回顾|每周回顾|回顾|复盘)/i.test(text.trim())) return say(await this.#retro(cn));
     // "Run X every day" becomes a schedule (and a first run now).
@@ -248,7 +272,13 @@ export class Chief {
     this.busy = true;
     this.store.changed();
     try {
-      const plan = await this.#split(text, projectId, topicId);
+      const plan = await this.#split(text, projectId, topicId, card);
+      // More than a small fix, in a project with an analyst: a card for the customer to confirm, nothing built yet.
+      if (plan.requirement && plan.todos?.length) {
+        const r = upsertRequirement(this.store, { existing: card, req: plan.requirement, todos: plan.todos, projectId, topicId, origin: text });
+        if (plan.reply) say(plan.reply);
+        return say(requirementText(r, (n) => this.#agentOf(n)?.name || ''), { requirementId: r.id });
+      }
       // A question or small talk gets an answer, not a todo.
       if (!plan.todos?.length) return say(plan.reply || this.#intro(cn));
       const created = plan.todos.map((p) => this.#create(p, projectId, topicId));
@@ -314,19 +344,67 @@ export class Chief {
     return t;
   }
 
-  async #split(text, projectId, topicId) {
+  #agentOf(name) {
+    return name ? this.store.data.agents.find((a) => a.name.toLowerCase() === String(name).toLowerCase()) : null;
+  }
+
+  /** The customer said yes to a card: its todos are filed and start. Never called by a lead or an agent. */
+  confirmRequirement(r) {
+    if (r.status !== 'confirm') throw new Error(`R${r.number} is not waiting for confirmation`);
+    const cn = /[一-鿿]/.test(r.title + (r.problem || ''));
+    const created = (r.todos || []).map((x) => {
+      const t = this.#create({ ...x, description: todoDescription(r, x) }, r.projectId, r.topicId);
+      t.requirementId = r.id;
+      return t;
+    });
+    r.todoIds = created.map((t) => t.id);
+    r.status = created.length ? 'building' : 'done';
+    r.confirmedAt = now();
+    r.updatedAt = now();
+    this.store.changed();
+    const list = created.map((t) => `#${t.number} ${t.title} → ${this.store.agent(t.agentId)?.name || '—'}`).join('\n');
+    return this.say(cn ? `需求 R${r.number} 已确认，开工：\n${list}` : `R${r.number} confirmed. Work has started:\n${list}`, { topicId: r.topicId, todoIds: r.todoIds, requirementId: r.id });
+  }
+
+  dropRequirement(r) {
+    if (r.status !== 'confirm') throw new Error(`R${r.number} is not waiting for confirmation`);
+    const cn = /[一-鿿]/.test(r.title + (r.problem || ''));
+    r.status = 'dropped';
+    r.updatedAt = now();
+    this.store.changed();
+    return this.say(cn ? `好，需求 R${r.number} 先不做了。` : `OK, R${r.number} is dropped.`, { topicId: r.topicId, requirementId: r.id });
+  }
+
+  #onRequirement(t) {
+    const r = t.requirementId && (this.store.data.requirements || []).find((x) => x.id === t.requirementId);
+    if (!r || !syncRequirement(r, this.store.data.todos)) return;
+    this.store.changed();
+    if (r.status !== 'done') return;
+    const cn = /[一-鿿]/.test(r.title + (r.problem || ''));
+    const acc = (r.acceptance || []).map((x, i) => `${i + 1}. ${x}`).join('\n');
+    this.say(cn ? `需求 R${r.number}「${r.title}」的任务都做完了。${acc ? `可以对照这几条看看：\n${acc}` : ''}` : `R${r.number} “${r.title}” is done.${acc ? ` Worth checking:\n${acc}` : ''}`, { topicId: r.topicId, requirementId: r.id });
+  }
+
+  async #split(text, projectId, topicId, card = null) {
     const d = this.store.data;
     const runtimeId = resolveRuntime(d.settings.chiefRuntime);
-    if (runtimeId === 'demo') return isChat(text) ? { todos: [] } : { todos: splitRequest(text) };
-    const agents = d.agents.map((a) => `- ${a.name}: ${a.role}`).join('\n');
     const analyst = this.store.project(projectId) || d.projects[0];
+    if (runtimeId === 'demo' && !(this.analyze && analyst?.analyst)) return isChat(text) ? { todos: [] } : { todos: splitRequest(text) };
+    const agents = d.agents.map((a) => `- ${a.name}: ${a.role}`).join('\n');
     if (analyst?.analyst) {
       // A project with an analyst: a conversation about requirements, not a one-shot split.
       const history = d.chief.filter((m) => m.topicId === topicId && !m.error).slice(-13, -1);
       try {
-        const res = await runtimes[runtimeId].run({ prompt: analystPrompt({ agents, project: analyst, history, text }), kind: 'chief', cwd: analyst.path || this.store.dir, settings: d.settings });
-        const json = extractJson(res.text);
-        if (json && (json.reply || json.todos?.length)) return { reply: String(json.reply || ''), todos: Array.isArray(json.todos) ? json.todos.filter((x) => x?.title).slice(0, 6) : [] };
+        const prompt = analystPrompt({ agents, project: analyst, history, text, card });
+        const out = this.analyze ? await this.analyze(prompt, analyst) : (await runtimes[runtimeId].run({ prompt, kind: 'chief', cwd: analyst.path || this.store.dir, settings: d.settings })).text;
+        const json = extractJson(out);
+        if (json && (json.reply || json.todos?.length)) {
+          const todos = Array.isArray(json.todos) ? json.todos.filter((x) => x?.title).slice(0, 6) : [];
+          // Anything but a small fix waits for the customer (unless the person turned the card off for this project).
+          const req = json.small === true && todos.length === 1 ? null : normalizeRequirement(json.requirement) || (todos.length ? normalizeRequirement({ title: todos[0].title, problem: text, scope: todos.map((x) => x.title) }) : null);
+          const gate = analyst.confirmRequirements !== false;
+          return { reply: String(json.reply || ''), todos, requirement: gate && todos.length ? req : null };
+        }
       } catch (e) {
         this.say(`(${runtimeId} could not answer as the analyst, falling back to a simple split: ${e.message.slice(0, 160)})`);
       }

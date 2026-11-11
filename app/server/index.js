@@ -74,6 +74,7 @@ export function createApp({ dataDir } = {}) {
       agents: d.agents,
       todos: d.todos,
       chief: d.chief.slice(-600),
+      requirements: (d.requirements || []).slice(-300),
       topics: d.topics,
       mcpPath: path.join(here, '..', 'mcp', 'server.js'),
       chiefBusy: chief.busy,
@@ -158,7 +159,7 @@ export function createApp({ dataDir } = {}) {
     }
     if (res === 'chief' && method === 'POST') {
       if (!body.text?.trim()) throw new HttpError(400, 'Empty message');
-      chief.handle(body.text.trim(), { projectId: body.projectId, topicId: body.topicId }); // runs in background; progress arrives as events
+      chief.handle(body.text.trim(), { projectId: body.projectId, topicId: body.topicId, canConfirm: body.via !== 'mcp' }); // runs in background; progress arrives as events
       return { ok: true };
     }
     if (res === 'topics') {
@@ -239,6 +240,20 @@ export function createApp({ dataDir } = {}) {
           const [hash, author, date, subject] = l.split('\x1f');
           return { hash, author, date, subject };
         });
+      }
+    }
+
+    if (res === 'requirements') {
+      if (method === 'GET' && !rid) return store.data.requirements || [];
+      const r = (store.data.requirements || []).find((x) => x.id === rid || String(x.number) === String(rid).replace(/^R/i, ''));
+      if (!r) throw new HttpError(404, 'No such requirement');
+      if (method === 'GET' && !sub) return r;
+      // Only the customer, from the board or their own reply, confirms a card; the lead has no way to.
+      if (method === 'POST' && (sub === 'confirm' || sub === 'drop')) {
+        if (r.status !== 'confirm') throw new HttpError(400, `R${r.number} is not waiting for confirmation`);
+        if (sub === 'confirm') chief.confirmRequirement(r);
+        else chief.dropRequirement(r);
+        return r;
       }
     }
 
