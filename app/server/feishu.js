@@ -344,6 +344,10 @@ export class FeishuLink {
     const agent = this.store.data.agents.find((a) => a.id === t.agentId);
     const status = (cn ? PHASE_ZH : PHASE_EN)[t.phase] || t.phase;
     const lines = [`**${status}**${agent ? ` · ${agent.name}` : ''}`];
+    // The project's lead looks first: no buttons until it passes the todo on.
+    const lead = !!t.leadPending;
+    if (lead) lines.push('开发主管正在处理，需要你时会再通知。');
+    if (!lead && t.leadAsk && (t.leadAsk.text || t.leadAsk.recommend)) lines.push(`主管请你拍板：${t.leadAsk.text || ''}${t.leadAsk.recommend ? `\n主管建议：${t.leadAsk.recommend}` : ''}`);
     if (t.phase === 'confirm' && t.plan) lines.push(String(t.plan).slice(0, 1500));
     if (t.phase === 'asking' && t.question?.text) lines.push(`❓ ${t.question.text}\n在话题里直接回复答案即可。`);
     const said = [...(t.messages || [])].reverse().find((x) => x.role === 'agent' && !x.hidden)?.text;
@@ -354,9 +358,9 @@ export class FeishuLink {
     if (url) lines.push(`[在 Autodos 中打开](${url.replace(/\/$/, '')}/#/todo/${t.number})`);
     const buttons = [];
     const btn = (label, action, type = 'primary') => buttons.push({ tag: 'button', text: { tag: 'plain_text', content: label }, type, value: { todo: t.id, do: action } });
-    if (t.phase === 'confirm') btn('确认计划', 'confirm');
-    if (t.phase === 'review') btn('合并', 'done');
-    if (t.phase === 'failed') btn('重试', 'retry', 'default');
+    if (!lead && t.phase === 'confirm') btn('确认计划', 'confirm');
+    if (!lead && t.phase === 'review') btn('合并', 'done');
+    if (!lead && t.phase === 'failed') btn('重试', 'retry', 'default');
     const elements = [{ tag: 'div', text: { tag: 'lark_md', content: lines.join('\n\n') } }];
     if (buttons.length) elements.push({ tag: 'action', actions: buttons });
     if (['confirm', 'review'].includes(t.phase)) elements.push({ tag: 'note', elements: [{ tag: 'plain_text', content: '要改的话，在话题里直接回复。' }] });

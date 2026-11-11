@@ -6,7 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { startServer } from './index.js';
-import { splitRequest, labelsFor } from './chief.js';
+import { splitRequest, labelsFor, analystPrompt } from './chief.js';
+import { leadOptions, leadPrompt, parseLead, ownerHits } from './lead.js';
+import { parseConfig } from './autopilot.js';
 
 process.env.AUTODOS_ALLOW_LOCAL_CHANNELS = '1';
 let srv;
@@ -951,4 +953,106 @@ test('autodos.json: the repository declares its own settings and rules, loaded o
   assert.equal(state.projects.find((x) => x.id === p.id).autopilot.accept, false);
   assert.equal(state.rules.filter((x) => x.fromConfig === p.id).length, 0, 'rules the file no longer lists are removed');
   for (const t of state.todos.filter((x) => x.projectId === p.id && !['done', 'closed'].includes(x.phase))) await call('POST', `/todos/${t.number}/action`, { action: 'close' });
+});
+
+test('lead: what it may decide follows the facts, and its answer is checked', () => {
+  const project = { checks: ['npm test'], protectedPaths: ['scripts/*'], lead: { decide: true, ownerPaths: ['deploy/*', '*.env'] }, knowledge: ['docs/BRIEF.md'], memory: { decisions: [{ text: 'Use pnpm' }], declined: [] } };
+  const t = { number: 7, title: 'Tidy scripts', phase: 'review', worktree: '/w', files: ['scripts/a.sh'], checks: { passed: true, results: [] }, review: { reviewer: 'codex', summary: 'fine', findings: [] }, messages: [], gateReason: 'it touches protected files (scripts/a.sh)' };
+  assert.deepEqual(leadOptions(t, project).allowed, ['approve', 'send_back', 'escalate']);
+  // Files only the customer may approve, failing checks and a high finding each take "approve" off the table.
+  assert.deepEqual(ownerHits(['deploy/run.sh', 'a/b.env', 'autodos.json', 'src/x.js'], project.lead.ownerPaths), ['deploy/run.sh', 'a/b.env', 'autodos.json']);
+  assert.deepEqual(leadOptions({ ...t, files: ['deploy/run.sh'] }, project).allowed, ['send_back', 'escalate']);
+  assert.deepEqual(leadOptions({ ...t, checks: { passed: false, results: [] } }, project).allowed, ['send_back', 'escalate']);
+  assert.deepEqual(leadOptions({ ...t, review: { findings: [{ severity: 'high' }] } }, project).allowed, ['send_back', 'escalate']);
+  assert.deepEqual(leadOptions({ ...t, phase: 'asking' }, project).allowed, ['answer', 'escalate']);
+  assert.deepEqual(leadOptions({ ...t, phase: 'failed' }, project).allowed, ['retry', 'escalate']);
+  const prompt = leadPrompt(t, project, leadOptions(t, project));
+  assert.match(prompt, /development lead/);
+  assert.match(prompt, /Use pnpm/);
+  assert.match(prompt, /docs\/BRIEF\.md/);
+  assert.match(prompt, /Why it did not land by itself: it touches protected files/);
+  assert.match(prompt, /Sensitive files it touches[^\n]*scripts\/a\.sh/);
+  // Only a decision that is open at this gate counts, and an instruction needs words.
+  assert.equal(parseLead('{"decision":"approve","why":"ok"}', ['send_back', 'escalate']), null);
+  assert.equal(parseLead('{"decision":"send_back","text":""}', ['send_back', 'escalate']), null);
+  assert.equal(parseLead('sure: {"decision":"send_back","text":"Fix the glob","why":"real bug"}', ['send_back', 'escalate']).text, 'Fix the glob');
+  assert.equal(parseLead('not json', ['approve']), null);
+});
+
+test('analyst: the customer is asked about the product, never about the plumbing', () => {
+  const prompt = analystPrompt({ agents: '- Dev: builds things', project: { knowledge: ['docs/BRIEF.md', 'tasks/'], memory: { decisions: [{ text: 'Test builds weekly' }], declined: [] } }, history: [{ role: 'user', text: 'Uploads fail after a break' }, { role: 'chief', text: 'After how long?' }], text: 'About an hour' });
+  assert.match(prompt, /requirements analyst/);
+  assert.match(prompt, /docs\/BRIEF\.md/);
+  assert.match(prompt, /Customer: Uploads fail after a break/);
+  assert.match(prompt, /You: After how long\?/);
+  assert.match(prompt, /Never ask the customer about code, repositories, branches, environments/);
+  assert.match(prompt, /at most 3 acceptance checks/);
+  const { config, warnings } = parseConfig(JSON.stringify({ lead: { decide: true, ownerPaths: ['deploy/*'] }, analyst: true, knowledge: ['docs/BRIEF.md', '../secrets', 'tasks/'] }));
+  assert.deepEqual(config.lead, { decide: true, ownerPaths: ['deploy/*'], maxRounds: 6 });
+  assert.equal(config.analyst, true);
+  assert.deepEqual(config.knowledge, ['docs/BRIEF.md', 'tasks/']);
+  assert.ok(warnings.some((w) => /knowledge: \.\.\/secrets/.test(w)));
+});
+
+test('lead: stands at the gates before the person, decides what is technical and passes on what is not', async () => {
+  const repo = mkRepo('repo-lead');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  await call('PATCH', `/projects/${p.id}`, { checks: ['test -f a.txt'], autopilot: { accept: true }, protectedPaths: ['deploy/*'], lead: { decide: true, ownerPaths: ['prod/*'] } });
+  const said = () => srv.store.data.chief.map((m) => m.text).join('\n');
+  // A sensitive file keeps the change from landing by itself; the lead looks and accepts it. The person hears nothing.
+  const a = await runTodo(p.id, 'Lead A', { 'deploy/run.sh': 'echo hi\n' });
+  await waitFor(async () => (await phaseOf(a.number)) === 'done', 30000);
+  assert.ok(fs.existsSync(path.join(repo, 'deploy/run.sh')), 'merged on the lead\'s word');
+  const ta = await todoOf(a.number);
+  assert.ok(ta.messages.some((m) => /Not landed by itself: it touches protected files \(deploy\/run\.sh\)\. The lead looks at it first/.test(m.text)));
+  assert.ok(ta.messages.some((m) => m.kind === 'lead' && /The lead accepted the change/.test(m.text)));
+  assert.ok(!/Lead A is ready for your review/.test(said()));
+  // A file only the customer may approve: the lead cannot accept it, and passes it on.
+  const b = await runTodo(p.id, 'Lead B', { 'prod/switch.sh': 'echo go\n' });
+  const held = await waitFor(async () => {
+    const x = await todoOf(b.number);
+    return x.phase === 'review' && x.leadHold && x;
+  }, 30000);
+  assert.ok(held.leadAsk && held.leadAsk.blocks.some((x) => /only the customer may approve \(prod\/switch\.sh\)/.test(x)));
+  assert.ok(!fs.existsSync(path.join(repo, 'prod')));
+  await waitFor(() => /Lead B needs your decision/.test(said()));
+  await call('POST', `/todos/${b.number}/action`, { action: 'done' });
+  await waitFor(async () => (await phaseOf(b.number)) === 'done', 30000);
+  // An engineer's question is answered by the lead, and the work goes on.
+  const { body: c } = await call('POST', '/todos', { title: 'Lead C [ask]', projectId: p.id, start: true });
+  await waitFor(async () => (await todoOf(c.number)).messages.some((m) => m.lead && /Answer to your question: Go with: Keep the old layout/.test(m.text)), 30000);
+  await waitFor(async () => (await phaseOf(c.number)) === 'done', 30000);
+  assert.ok(!/Lead C needs your decision/.test(said()));
+  // Failing checks: sent back to the author instead of to the person.
+  await call('PATCH', `/projects/${p.id}`, { checks: ['test -f needed.txt'] });
+  await call('PATCH', '/settings', { verifyAttempts: 0 });
+  const d = await runTodo(p.id, 'Lead D', { 'd.txt': 'd\n' });
+  const back = await waitFor(async () => {
+    const x = await todoOf(d.number);
+    return x.messages.some((m) => m.kind === 'lead' && /The lead sent it back/.test(m.text)) && x;
+  }, 30000);
+  fs.writeFileSync(path.join(back.worktree, 'needed.txt'), 'here\n');
+  await waitFor(async () => (await phaseOf(d.number)) === 'done', 40000);
+  await call('PATCH', '/settings', { verifyAttempts: 2 });
+  const log = (await call('GET', '/state')).body.projects.find((x) => x.id === p.id).leadLog.map((x) => `${x.todo}:${x.gate}:${x.decision}`);
+  for (const want of [`${a.number}:review:approve`, `${b.number}:review:escalate`, `${c.number}:asking:answer`, `${d.number}:review:send_back`]) assert.ok(log.includes(want), `${want} in ${log}`);
+});
+
+test('lead: a plan is confirmed by the lead, and switching the lead on takes over what is waiting', async () => {
+  const repo = mkRepo('repo-lead2');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  // Waiting for the person, the old way.
+  const { body: w } = await call('POST', '/todos', { title: 'Waiting plan', projectId: p.id, mode: 'plan', start: true });
+  await waitFor(async () => (await phaseOf(w.number)) === 'confirm');
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(await phaseOf(w.number), 'confirm');
+  // The lead is switched on: it confirms the plan that was waiting, and the next one too.
+  await call('PATCH', `/projects/${p.id}`, { lead: { decide: true } });
+  await waitFor(async () => !['confirm'].includes(await phaseOf(w.number)), 15000);
+  const { body: n } = await call('POST', '/todos', { title: 'Next plan', projectId: p.id, mode: 'plan', start: true });
+  await waitFor(async () => (await todoOf(n.number)).messages.some((m) => m.kind === 'lead' && /confirmed the plan/.test(m.text)), 20000);
+  // A todo the person moved to Review themselves stays theirs.
+  await waitFor(async () => ['review', 'done'].includes(await phaseOf(n.number)), 30000);
+  for (const t of [w, n]) await waitFor(async () => ['review', 'done'].includes(await phaseOf(t.number)), 30000);
+  for (const t of [w, n]) if ((await phaseOf(t.number)) !== 'done') await call('POST', `/todos/${t.number}/action`, { action: 'close' });
 });

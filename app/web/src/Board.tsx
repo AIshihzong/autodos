@@ -79,7 +79,7 @@ function Card({ todo, state, onOpen }: { todo: Todo; state: State; onOpen: (id: 
           <Avatar name={agent?.name} color={agent?.color} size={18} />
           <span className="ellipsis">{agent?.name}</span>
           <span className="grow" />
-          <span className="muted">{todo.stage ? t[`stage_${todo.stage}` as keyof Dict] : todo.phase === 'asking' || todo.phase === 'failed' ? t[`ph_${todo.phase}` as keyof Dict] : ago(todo.updatedAt, lang)}</span>
+          <span className="muted">{todo.leadPending ? t.leadDeciding : todo.stage ? t[`stage_${todo.stage}` as keyof Dict] : todo.phase === 'asking' || todo.phase === 'failed' ? t[`ph_${todo.phase}` as keyof Dict] : ago(todo.updatedAt, lang)}</span>
         </div>
       )}
       {running && <div className="progress-bar" />}
@@ -125,7 +125,8 @@ export function Board({ state, filter, projectId, onOpen, only, onCreate }: { st
       )}
       <div className="board">
         {COLUMNS.map((col) => {
-          let items = todos.filter((x) => col.phases.includes(x.phase));
+          // A todo the project's lead is deciding on is still the team's, not yours.
+          let items = todos.filter((x) => (x.leadPending ? col.key === 'progress' : col.phases.includes(x.phase)));
           if (col.key === 'done') items = items.filter((x) => Date.parse(x.updatedAt) > weekAgo);
           return (
             <section

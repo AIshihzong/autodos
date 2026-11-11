@@ -184,7 +184,10 @@ export function memoryBlock(project) {
   const m = project?.memory;
   if (!m || (!m.decisions?.length && !m.declined?.length)) return '';
   const parts = [];
-  if (m.decisions?.length) parts.push(`Decisions the person has made for this project (follow them, don't ask again):\n${m.decisions.map((x) => `- ${x.text}`).join('\n')}`);
+  const own = (m.decisions || []).filter((x) => x.by !== 'lead');
+  const lead = (m.decisions || []).filter((x) => x.by === 'lead');
+  if (own.length) parts.push(`Decisions the person has made for this project (follow them, don't ask again):\n${own.map((x) => `- ${x.text}`).join('\n')}`);
+  if (lead.length) parts.push(`Technical decisions the team's lead has made (follow them unless the person's decisions say otherwise):\n${lead.map((x) => `- ${x.text}`).join('\n')}`);
   if (m.declined?.length) parts.push(`Things the person declined (don't propose or do them):\n${m.declined.map((x) => `- ${x.text}`).join('\n')}`);
   return parts.join('\n\n');
 }

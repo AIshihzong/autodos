@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { State, Todo, useAppState, useDoctor, useOnline } from './api';
+import { State, Todo, useAppState, useDoctor, useOnline, needsYou } from './api';
 import { Board, NewTodo, PhaseBadge, StatusIcon, todoKey } from './Board';
 import { Chat } from './Chat';
 import { Dict, Lang, LangContext, dicts, useLang, useT } from './i18n';
@@ -44,7 +44,7 @@ function Inbox({ state, onOpen }: { state: State; onOpen: (id: string) => void }
   const t = useT();
   const lang = useLang();
   const order = ['asking', 'confirm', 'failed', 'review'];
-  const items = state.todos.filter((x) => NEEDS.includes(x.phase)).sort((a, b) => order.indexOf(a.phase) - order.indexOf(b.phase) || b.updatedAt.localeCompare(a.updatedAt));
+  const items = state.todos.filter(needsYou).sort((a, b) => order.indexOf(a.phase) - order.indexOf(b.phase) || b.updatedAt.localeCompare(a.updatedAt));
   return (
     <div className="page">
       <header className="page-head">
@@ -79,7 +79,7 @@ function Inbox({ state, onOpen }: { state: State; onOpen: (id: string) => void }
 
 function WorkNav({ state, view, setView, projectId, setProjectId, onProjects }: { state: State; view: View; setView: (v: View) => void; projectId: string; setProjectId: (p: string) => void; onProjects: () => void }) {
   const t = useT();
-  const count = (phases: string[]) => state.todos.filter((x) => phases.includes(x.phase) && (!projectId || x.projectId === projectId)).length;
+  const count = (phases: string[]) => state.todos.filter((x) => (phases === NEEDS ? needsYou(x) : phases.includes(x.phase) || !!x.leadPending) && (!projectId || x.projectId === projectId)).length;
   const views: { key: View; icon: string; label: string; n?: number }[] = [
     { key: 'all', icon: 'work', label: t.allTodos },
     { key: 'needs', icon: 'inbox', label: t.needsMe, n: count(NEEDS) },
@@ -134,8 +134,8 @@ function useDesktopAlerts(state: State | null, t: Dict) {
     seen.current = new Map(state.todos.map((x) => [x.id, x.phase]));
     if (document.hasFocus()) return;
     for (const x of state.todos)
-      if (before && WAITING.includes(x.phase) && before.get(x.id) !== x.phase) native.notify(`${todoKey(x, state)} ${x.title}`, (t as any)['ph_' + x.phase]);
-    native.setBadge(state.todos.filter((x) => WAITING.includes(x.phase)).length);
+      if (before && WAITING.includes(x.phase) && !x.leadPending && before.get(x.id) !== x.phase) native.notify(`${todoKey(x, state)} ${x.title}`, (t as any)['ph_' + x.phase]);
+    native.setBadge(state.todos.filter((x) => WAITING.includes(x.phase) && !x.leadPending).length);
   }, [state, t]);
   useEffect(() => {
     const native = (window as any).autodos;
@@ -250,8 +250,8 @@ export function App() {
     );
   }
   const project = state.projects.find((p) => p.id === projectId) ? projectId : '';
-  const needs = state.todos.filter((x) => NEEDS.includes(x.phase)).length;
-  const viewFilter = (x: Todo) => (view === 'needs' ? NEEDS.includes(x.phase) : view === 'running' ? RUNNING.includes(x.phase) : true);
+  const needs = state.todos.filter(needsYou).length;
+  const viewFilter = (x: Todo) => (view === 'needs' ? needsYou(x) : view === 'running' ? RUNNING.includes(x.phase) || !!x.leadPending : true);
   const viewTitle = view === 'needs' ? t.needsMe : view === 'running' ? t.agentsWork : t.allTodos;
 
   const railBtn = (key: Page, icon: string, label: string, badge = 0) => (

@@ -2,6 +2,7 @@
 import { id, now } from './store.js';
 import { runtimes, resolveRuntime } from './runtimes.js';
 import { memoryBlock } from './quality.js';
+import { knowledgeBlock } from './lead.js';
 import { refOf } from './git.js';
 import { nextRun } from './rules.js';
 import { retroStats, retroText } from './retro.js';
@@ -82,6 +83,36 @@ function extractJson(text) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The requirements analyst: the voice the customer talks to in a project that has one (project.analyst).
+ * It knows the product from the project's knowledge files and the repository, talks about ideas and problems
+ * in the customer's terms, never asks them technical questions, and files work once it is clear enough to build.
+ */
+export function analystPrompt({ agents, project, history, text }) {
+  const said = (history || []).map((m) => `${m.role === 'user' ? 'Customer' : 'You'}: ${String(m.text).slice(0, 1500)}`).join('\n\n');
+  return `You are the requirements analyst of a professional software team, and you know this product in depth. The customer brings ideas and problems to you. Your job is to understand what they want, connect it to what already exists, and turn it into requirements the team can build without coming back to them.
+
+Before you answer, read what you need: you are in the project's repository with read access. Do not change any files.
+${knowledgeBlock(project) || 'Look through the repository (README, docs, task notes) for what the product is and what is already decided.'}
+
+${memoryBlock(project) ? memoryBlock(project) + '\n\n' : ''}The team that will build it (the lead settles everything technical with them; you only pick who starts):
+${agents}
+
+${said ? `Conversation so far:\n${said}\n\n` : ''}The customer's new message:
+${text}
+
+How to respond:
+- A question about the product or the project: answer it from what you read, briefly, and return "todos": [].
+- An idea or a problem: say back in one or two sentences what you understood. Relate it to requirements, decisions or known problems that already exist (name their ids) and say so if it repeats or contradicts one.
+- Never ask the customer about code, repositories, branches, environments, servers, tooling, test methods or who on the team does what: find it out yourself or leave it to the lead as an open technical question.
+- Ask only what the customer alone can know (who it is for, what they should see happen, what matters more), at most 2 questions in one reply, each with the answer you would assume so they can simply say yes. If nothing essential is open, do not ask; go ahead with sensible assumptions and state them.
+- Once it is clear enough to build, return 1-6 todos that can run in parallel. Keep the customer's own requirement id at the start of a title when there is one. Each description holds, in the customer's language: the problem in their words; what is in scope and what is not; at most 3 acceptance checks, each something a person can see happen (not an implementation detail); related requirement ids; open technical questions for the lead.
+- While you still need an answer from the customer, return "todos": [] and put your questions in "reply".
+
+Answer with JSON only, no prose and no code fence:
+{"reply": "what you say to the customer, in the language they wrote in, plain words, no technical terms", "todos": [{"title": "imperative, under 80 chars", "description": "as described above", "agent": "exact teammate name", "labels": ["feature"|"bug"|"infra"|"docs"|...]}]}`;
 }
 
 export class Chief {
@@ -174,7 +205,7 @@ export class Chief {
     this.busy = true;
     this.store.changed();
     try {
-      const plan = await this.#split(text, projectId);
+      const plan = await this.#split(text, projectId, topicId);
       // A question or small talk gets an answer, not a todo.
       if (!plan.todos?.length) return say(plan.reply || this.#intro(cn));
       const created = plan.todos.map((p) => this.#create(p, projectId, topicId));
@@ -213,11 +244,24 @@ export class Chief {
     return t;
   }
 
-  async #split(text, projectId) {
+  async #split(text, projectId, topicId) {
     const d = this.store.data;
     const runtimeId = resolveRuntime(d.settings.chiefRuntime);
     if (runtimeId === 'demo') return isChat(text) ? { todos: [] } : { todos: splitRequest(text) };
     const agents = d.agents.map((a) => `- ${a.name}: ${a.role}`).join('\n');
+    const analyst = this.store.project(projectId) || d.projects[0];
+    if (analyst?.analyst) {
+      // A project with an analyst: a conversation about requirements, not a one-shot split.
+      const history = d.chief.filter((m) => m.topicId === topicId && !m.error).slice(-13, -1);
+      try {
+        const res = await runtimes[runtimeId].run({ prompt: analystPrompt({ agents, project: analyst, history, text }), kind: 'chief', cwd: analyst.path || this.store.dir, settings: d.settings });
+        const json = extractJson(res.text);
+        if (json && (json.reply || json.todos?.length)) return { reply: String(json.reply || ''), todos: Array.isArray(json.todos) ? json.todos.filter((x) => x?.title).slice(0, 6) : [] };
+      } catch (e) {
+        this.say(`(${runtimeId} could not answer as the analyst, falling back to a simple split: ${e.message.slice(0, 160)})`);
+      }
+      return isChat(text) ? { todos: [] } : { todos: splitRequest(text) };
+    }
     const prompt = `You are the lead of a small software team. Turn the person's request into 1-6 independent todos that can run in parallel, and assign each to the best teammate.
 
 Team:
@@ -279,6 +323,14 @@ Answer with JSON only, no prose and no code fence:
     const ref = `#${t.number} ${t.title}`;
     const cn = zh(t.title);
     const topicId = t.topicId;
+    // The project's lead stands at this gate first (lead.js); the person hears only if the lead passes it on.
+    if (t.leadPending) return;
+    const ask = t.leadAsk;
+    if (ask && ['confirm', 'review', 'asking', 'failed'].includes(t.phase)) {
+      const q = ask.text || (cn ? '这一项需要你来定。' : 'This one needs your decision.');
+      const hint = ask.recommend ? (cn ? `\n主管建议：${ask.recommend}` : `\nThe lead suggests: ${ask.recommend}`) : '';
+      return void this.say(cn ? `${ref} 需要你拍板：${q}${hint}` : `${ref} needs your decision: ${q}${hint}`, { todoIds: [t.id], topicId });
+    }
     if (t.phase === 'confirm') this.say(cn ? `${ref} 的计划写好了，等你确认。` : `${ref}: plan is ready for you to confirm.`, { todoIds: [t.id], topicId });
     else if (t.phase === 'review' && t.autoAccepting) return; // accepted without the person: nothing to ask of them
     else if (t.phase === 'review') this.say(cn ? `${ref} 完成了，等你审核。` : `${ref} is ready for your review.`, { todoIds: [t.id], topicId });

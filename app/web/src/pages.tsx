@@ -154,6 +154,10 @@ function ChecksEditor({ project }: { project: Project }) {
     accept: !!project.autopilot?.accept,
     maxFiles: project.autopilot?.maxFiles || 0,
     protectedPaths: (project.protectedPaths || []).join('\n'),
+    leadDecide: !!project.lead?.decide,
+    ownerPaths: (project.lead?.ownerPaths || []).join('\n'),
+    analyst: !!project.analyst,
+    knowledge: (project.knowledge || []).join('\n'),
     backlogFile: project.backlog?.file || '',
     backlogOpen: project.backlog?.maxOpen || 1,
     upstreamUrl: project.upstream?.url || '',
@@ -177,6 +181,9 @@ function ChecksEditor({ project }: { project: Project }) {
     pushBase: v.pushBase,
     autopilot: { ...(project.autopilot || {}), accept: v.accept, maxFiles: v.maxFiles },
     protectedPaths: lines(v.protectedPaths),
+    lead: { ...(project.lead || {}), decide: v.leadDecide, ownerPaths: lines(v.ownerPaths) },
+    analyst: v.analyst,
+    knowledge: lines(v.knowledge),
     backlog: v.backlogFile.trim() ? { ...(project.backlog || {}), file: v.backlogFile.trim(), maxOpen: v.backlogOpen } : null,
     upstream: v.upstreamUrl.trim() ? { ...(project.upstream || {}), url: v.upstreamUrl.trim(), branch: v.upstreamBranch.trim() || 'main', every: v.upstreamEvery } : null,
   });
@@ -222,6 +229,43 @@ function ChecksEditor({ project }: { project: Project }) {
           </Row>
         </Group>
       )}
+      <Group title={t.teamRoles}>
+        <Row label={t.leadDecides} sub={t.leadDecidesHint}>
+          <Switch checked={v.leadDecide} onChange={(x) => setV({ ...v, leadDecide: x })} label={t.leadDecides} />
+        </Row>
+        {v.leadDecide && (
+          <div className="g-row stack">
+            <label className="g-label">
+              <span>{t.ownerPaths}</span>
+              <small>{t.ownerPathsHint}</small>
+            </label>
+            <textarea className="checks-edit" rows={3} value={v.ownerPaths} placeholder={'deploy/*\n*.env\ndatabase/migrations/*'} onChange={(e) => setV({ ...v, ownerPaths: e.target.value })} aria-label={t.ownerPaths} />
+          </div>
+        )}
+        <Row label={t.analystOn} sub={t.analystHint}>
+          <Switch checked={v.analyst} onChange={(x) => setV({ ...v, analyst: x })} label={t.analystOn} />
+        </Row>
+        <div className="g-row stack">
+          <label className="g-label">
+            <span>{t.knowledge}</span>
+            <small>{t.knowledgeHint}</small>
+          </label>
+          <textarea className="checks-edit" rows={3} value={v.knowledge} placeholder={'docs/PROJECT_BRIEF.md\ndocs/requirements/'} onChange={(e) => setV({ ...v, knowledge: e.target.value })} aria-label={t.knowledge} />
+        </div>
+        {!!project.leadLog?.length && (
+          <div className="g-row stack">
+            <label className="g-label">
+              <span>{t.leadLog}</span>
+            </label>
+            {project.leadLog.slice(-8).reverse().map((x, i) => (
+              <small key={i} className="muted">
+                #{x.todo} {x.title} · {(t as any)[`lead_${x.decision}`] || x.decision}
+                {x.why ? `: ${x.why}` : ''}
+              </small>
+            ))}
+          </div>
+        )}
+      </Group>
       {project.git && (
         <Group
           title={t.unattended}

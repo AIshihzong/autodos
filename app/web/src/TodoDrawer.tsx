@@ -258,6 +258,7 @@ function QuestionCard({ todo }: { todo: Todo }) {
         <Icon name="chat" size={14} /> <strong>{t.question}</strong>
       </div>
       <p>{todo.question!.text}</p>
+      {todo.question!.recommend && <p className="muted small">{t.leadSuggests}: {todo.question!.recommend}</p>}
       <div className="q-options">
         {todo.question!.options.map((o) => (
           <button key={o} className="btn" onClick={() => answer(o)}>
@@ -452,7 +453,24 @@ export function TodoDrawer({ state, id, onClose, onOpen }: { state: State; id: s
             {error}
           </div>
         )}
-        {todo.phase === 'asking' && todo.question && <QuestionCard todo={todo} />}
+        {todo.leadPending && (
+          <div className="merge-note small">
+            <span className="spinner" /> {t.leadDecidingLong}
+          </div>
+        )}
+        {!todo.leadPending && todo.leadAsk && todo.phase !== 'asking' && ['confirm', 'review', 'failed'].includes(todo.phase) && (
+          <div className="question">
+            <div className="q-head">
+              <Icon name="chat" size={14} /> <strong>{t.leadAsks}</strong>
+            </div>
+            <p>{todo.leadAsk.text || todo.leadAsk.why}</p>
+            {todo.leadAsk.recommend && <p className="muted small">{t.leadSuggests}: {todo.leadAsk.recommend}</p>}
+            {(todo.leadAsk.blocks || []).map((b) => (
+              <p key={b} className="muted small">{b}</p>
+            ))}
+          </div>
+        )}
+        {!todo.leadPending && todo.phase === 'asking' && todo.question && <QuestionCard todo={todo} />}
         {todo.phase === 'merging' && (
           <div className="merge-note small">
             <span className="spinner" /> {t.mergeQueue}: {Math.max(1, state.todos.filter((x) => x.phase === 'merging' && x.projectId === todo.projectId && ((x as any).mergeQueuedAt || '') <= ((todo as any).mergeQueuedAt || '')).length)} / {state.todos.filter((x) => x.phase === 'merging' && x.projectId === todo.projectId).length} {t.inQueue}
@@ -533,10 +551,15 @@ export function TodoDrawer({ state, id, onClose, onOpen }: { state: State; id: s
                     {m.durationMs ? <span className="muted small">{duration(m.durationMs)}</span> : null}
                   </div>
                 )}
+                {m.role === 'user' && m.lead && (
+                  <div className="msg-head">
+                    <strong>{t.leadName}</strong>
+                  </div>
+                )}
                 <div className="msg-body">
                   <RichText text={m.text} state={state} onOpen={onOpen} />
                 </div>
-                {m.role === 'user' && project && (
+                {m.role === 'user' && !m.lead && project && (
                   <div className="remember">
                     <button onClick={() => run(async () => (await actions.remember(project, 'decisions', m.text, todo.number), setNote(t.remembered)))}>{t.saveDecision}</button>
                     <button onClick={() => run(async () => (await actions.remember(project, 'declined', m.text, todo.number), setNote(t.remembered)))}>{t.saveDeclined}</button>

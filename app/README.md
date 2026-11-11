@@ -126,6 +126,9 @@ These settings can live in the repository as `autodos.json`, so a fresh machine 
   "protectedPaths": ["deploy/*", ".github/workflows/*", "*.env"],
   "backlog": { "file": "docs/BACKLOG.md", "maxOpen": 2 },
   "upstream": { "url": "https://github.com/owner/repo", "branch": "main", "every": 60, "mirror": true },
+  "lead": { "decide": true, "ownerPaths": ["deploy/*", "*.env", "database/migrations/*"] },
+  "analyst": true,
+  "knowledge": ["docs/PROJECT_BRIEF.md", "docs/requirements/"],
   "memory": { "decisions": ["Never deploy from here"], "declined": [] },
   "rules": [{ "name": "Nightly sweep", "cron": "0 3 * * *", "title": "Nightly sweep", "prompt": "Find one flaky test and fix it.", "maxOpen": 1 }]
 }
@@ -134,6 +137,19 @@ These settings can live in the repository as `autodos.json`, so a fresh machine 
 The file is applied only when you load it. When it changes on the base branch the project shows that it is out of date, and nothing changes until you load it again: the file decides what runs on your machine and what may land without you, so an agent's edit to it must not take effect by itself.
 
 For an unattended project, set the agents' permission mode so they can run commands (Settings), give it a budget per todo, and leave the project folder alone: use a base branch that is not checked out there.
+
+## A team that decides for itself
+
+By default every question an agent asks, every plan and every finished change comes to you. A project can instead be run the way a customer works with a professional team: you bring ideas and problems, and the team settles what is technical among themselves. Two roles do that, both off until you turn them on for the project (Projects → Settings → Team, or `autodos.json`).
+
+- **The lead decides technical questions** (`lead.decide`). The lead stands at each gate before you do: an agent's question, a plan waiting to be confirmed, a change that did not land by itself, a failed run. It reads the task, the diff, the checks and the review, and then answers the agent, confirms the plan, accepts the change, sends it back with what to fix, or asks for another try. Environments, repositories, branches, tooling, which approach to take, whether a review finding is real: those never reach you. It passes on only what is yours: what the product does where the request does not settle it, money, anything that cannot be undone outside the repository, narrowing what you asked for, access only you can give. Then you get one question in plain words with the lead's suggestion.
+  - What the lead may accept is limited by facts, not by its opinion: it cannot accept a change whose checks fail, that has an open high-severity review finding, that the reviewer could not read whole, or that touches a file on the **Only you approve** list (`lead.ownerPaths`; `autodos.json` is always on it). Protected paths never land by the autopilot alone: with a lead they go to the lead, without one to you.
+  - After six rounds on one todo the lead stops and the todo waits for you. A todo you moved by hand, or that the lead passed to you, stays yours until it runs again. Acting on a todo yourself always wins over a decision the lead is still making.
+  - Every decision is a line on the todo and in the project's log (Projects → Settings → Team), and a standing technical decision goes into project memory so nobody asks again.
+- **Requirements analyst** (`analyst`). The conversation with the lead becomes a conversation about what you want: it reads the project's knowledge files and the repository, says back what it understood, relates it to requirements that already exist, asks at most two questions that only you can answer (each with the answer it would assume), and files todos once it is clear enough to build, each with scope and at most three acceptance checks a person can see happen. It never asks you about code, environments or tooling.
+- **Project knowledge** (`knowledge`): files and folders in the repository that the lead and the analyst read first, for example a project brief, the requirement list and decision notes. Keep them in the repository so they are reviewed like code; a rule can have an agent refresh the brief every week.
+
+The lead and the analyst run on the runtime chosen for the lead (Settings), read-only.
 
 ## Agents and runtimes
 

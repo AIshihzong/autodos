@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Store, id, now } from './store.js';
 import { Runner, PHASES } from './runner.js';
 import { Chief, newTodo, pickAgent, labelsFor } from './chief.js';
+import { Lead } from './lead.js';
 import { detectRuntimes } from './runtimes.js';
 import { diagnose, fix as fixCheck, fixJobs } from './doctor.js';
 import { FeishuLink } from './feishu.js';
@@ -35,6 +36,7 @@ class HttpError extends Error {
 export function createApp({ dataDir } = {}) {
   const store = new Store(dataDir);
   const runner = new Runner(store);
+  const lead = new Lead(store, runner);
   const chief = new Chief(store, runner);
   const feishu = new FeishuLink({ store, runner, chief, publicUrl: () => store.data.settings.publicUrl || '' });
   const clients = new Set();
@@ -490,7 +492,12 @@ export function createApp({ dataDir } = {}) {
         }
         return c.create(body);
       }
-      if (method === 'PATCH') return c.update(rid, body);
+      if (method === 'PATCH') {
+        const item = c.update(rid, body);
+        // Switching a project's lead on hands it what is waiting for the person right now.
+        if (name === 'projects' && body.lead?.decide) lead.sweep(item);
+        return item;
+      }
       if (method === 'DELETE') return c.remove(rid);
     }
     throw new HttpError(404, 'Not found');
@@ -664,7 +671,7 @@ export function createApp({ dataDir } = {}) {
     rules.close();
     store.flush();
   });
-  return { server, store, runner, chief, feishu, delivery, previews, workers, rules, autopilot };
+  return { server, store, runner, chief, lead, feishu, delivery, previews, workers, rules, autopilot };
 }
 
 export function startServer({ port = Number(process.env.PORT) || 4747, host = '127.0.0.1', dataDir } = {}) {

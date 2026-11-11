@@ -104,6 +104,7 @@ export function attachChannels(store, runner) {
   runner.on('phase', (t) => {
     if (t.tell === 'never') return;
     if (t.phase === 'review' && t.autoAccepting) return; // accepted without the person: nothing for them to do
+    if (t.leadPending) return; // the project's lead looks first; the person hears only if it is passed on
     const msg = text(t);
     if (!msg) return;
     for (const ch of store.data.channels || []) {

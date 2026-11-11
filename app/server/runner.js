@@ -49,11 +49,19 @@ export class Runner extends EventEmitter {
     setImmediate(() => this.pump());
   }
 
-  setPhase(t, phase) {
+  setPhase(t, phase, { byHand = false } = {}) {
     const from = t.phase;
     t.phase = phase;
     t.updatedAt = now();
-    if (from !== phase) this.emit('phase', t, from);
+    if (from === phase) return;
+    // A project's lead stands at a gate before the person does (lead.js). Where the person put the todo
+    // themselves, or the lead already passed this visit on to them, it is theirs.
+    if (byHand) t.leadHold = true;
+    else delete t.leadHold;
+    if (this.lead?.takes(t, phase)) t.leadPending = { gate: phase, at: now() };
+    else delete t.leadPending;
+    if (!['asking', 'confirm', 'review', 'failed'].includes(phase)) delete t.leadAsk;
+    this.emit('phase', t, from);
   }
 
   addMessage(t, role, text, extra = {}) {
@@ -81,6 +89,7 @@ export class Runner extends EventEmitter {
     if (this.busy(t)) throw new Error('This todo is already queued or running');
     if (mode) t.mode = mode;
     t.error = null;
+    t.leadRounds = 0;
     this.renewBudget(t);
     this.setPhase(t, 'queued');
     this.store.changed();
@@ -96,9 +105,13 @@ export class Runner extends EventEmitter {
     this.pump();
   }
 
-  /** A message from the person. At a gate it triggers a revision turn; otherwise it waits for the next turn. */
-  reply(t, text) {
-    this.addMessage(t, 'user', text, { pending: true });
+  /**
+   * A message from the person. At a gate it triggers a revision turn; otherwise it waits for the next turn.
+   * The project's lead speaks to the agent the same way (lead: true), which the conversation shows.
+   */
+  reply(t, text, { lead = false } = {}) {
+    this.addMessage(t, 'user', text, { pending: true, ...(lead ? { lead: true } : {}) });
+    if (!lead) t.leadRounds = 0; // the person stepped in: the lead starts counting again
     const ctrl = this.running.get(t.id);
     if (ctrl && this.store.data.settings.steer !== false && ['planning', 'building'].includes(t.phase)) {
       // Steering: stop this turn now and start the next one with the message, in the same session.
@@ -156,7 +169,7 @@ export class Runner extends EventEmitter {
     if (this.busy(t)) throw new Error("A todo that is queued or running can't be moved; stop it first");
     if (!['todo', 'confirm', 'review', 'failed', 'closed', 'asking'].includes(phase)) throw new Error(`Can't move a todo to ${phase} by hand`);
     if (phase === 'confirm' && !t.plan) throw new Error('This todo has no plan to confirm');
-    this.setPhase(t, phase);
+    this.setPhase(t, phase, { byHand: true });
     this.store.changed();
   }
 
@@ -298,7 +311,8 @@ export class Runner extends EventEmitter {
   #mergeBack(t, reason, { conflict = false, base = '', failed = null } = {}) {
     t.stage = null;
     const s = this.store.data.settings;
-    const unattended = !!this.store.project(t.projectId)?.autopilot?.accept && (t.autoAccepted || 0) < AUTO_ACCEPT_LIMIT;
+    const project = this.store.project(t.projectId);
+    const unattended = !!(project?.autopilot?.accept || project?.lead?.decide) && (t.autoAccepted || 0) < AUTO_ACCEPT_LIMIT;
     if (failed && unattended) {
       // Accepted without the person, so nobody is waiting at Review to read this: the author fixes it on the latest base.
       this.addMessage(t, 'system', `${reason}. Sent back to the agent to fix on top of the latest ${base || 'base'}.`, { error: true });
@@ -316,6 +330,7 @@ export class Runner extends EventEmitter {
       this.setPhase(t, 'queued');
       this.pump();
     } else {
+      t.gateReason = reason;
       this.addMessage(t, 'system', `${reason}. Back to Review; fix it or reply with instructions, then click Done again.`, { error: true });
       this.setPhase(t, 'review');
     }
@@ -401,8 +416,9 @@ export class Runner extends EventEmitter {
           );
         } else {
           const stay = this.#autopilot(t, project);
+          t.gateReason = stay || '';
           if (stay === '') t.autoAccepting = true; // accepted below, once this turn has let go of the todo
-          else if (stay) this.addMessage(t, 'system', `Left at Review for you: ${stay}.`, { kind: 'autopilot' });
+          else if (stay) this.addMessage(t, 'system', this.lead?.takes(t, 'review') ? `Not landed by itself: ${stay}. The lead looks at it first.` : `Left at Review for you: ${stay}.`, { kind: 'autopilot' });
           this.setPhase(t, 'review');
         }
       }
@@ -462,24 +478,34 @@ export class Runner extends EventEmitter {
     }
     const max = Number(ap.maxFiles) || 0;
     if (max && files.length > max) return `it changes ${files.length} files (the limit for unattended changes is ${max})`;
-    const hits = protectedHits(files, project.protectedPaths);
+    // Files only the person may approve (lead.ownerPaths) are protected too, lead or no lead.
+    const hits = protectedHits(files, [...(project.protectedPaths || []), ...(project.lead?.ownerPaths || [])]);
     if (hits.length) return `it touches protected files (${hits.slice(0, 5).join(', ')}${hits.length > 5 ? ', …' : ''})`;
     return '';
   }
 
-  /** Accept a change the autopilot cleared: the same path as the person clicking Done. */
-  #accept(t) {
+  /** The project's lead accepted a change at Review (lead.js): the same path as the person clicking Done. */
+  leadAccept(t) {
+    t.autoAccepting = true;
+    this.#accept(t, true);
+  }
+
+  /** Accept a change the autopilot (or the lead) cleared: the same path as the person clicking Done. */
+  #accept(t, byLead = false) {
     if (t.phase !== 'review') return void delete t.autoAccepting; // stopped or moved in the meantime
     t.autoAccepted = (t.autoAccepted || 0) + 1;
     const nothing = !(t.files || []).length;
-    this.addMessage(t, 'system', nothing ? 'Nothing was changed, so there is nothing to merge. Closed without waiting for you.' : 'Checks passed and the review left nothing to decide, so this was accepted without waiting for you.', { kind: 'autopilot' });
+    if (!byLead) this.addMessage(t, 'system', nothing ? 'Nothing was changed, so there is nothing to merge. Closed without waiting for you.' : 'Checks passed and the review left nothing to decide, so this was accepted without waiting for you.', { kind: 'autopilot' });
     const done = nothing ? this.#discard(t) : this.complete(t);
     done
       .catch((e) => this.addMessage(t, 'system', `Could not accept it automatically: ${e.message}. It waits at Review for you.`, { error: true, kind: 'autopilot' }))
       .finally(() => {
         const failed = t.phase === 'review';
         delete t.autoAccepting;
-        if (failed) this.emit('phase', t, 'review'); // now it does need the person: tell them
+        if (failed) {
+          t.leadHold = true;
+          this.emit('phase', t, 'review'); // now it does need the person: tell them
+        }
         this.store.changed();
       });
   }

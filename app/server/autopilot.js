@@ -85,6 +85,19 @@ export function parseConfig(text) {
       case 'memory':
         out.memory = { decisions: list(v?.decisions, 100), declined: list(v?.declined, 100) };
         break;
+      case 'lead':
+        out.lead = v ? { decide: v === true || !!v.decide, ownerPaths: list(v.ownerPaths, 100), maxRounds: num(v.maxRounds, 1, 20, 6) } : null;
+        break;
+      case 'analyst':
+        out.analyst = !!v;
+        break;
+      case 'knowledge': {
+        const files = list(v, 40);
+        const bad = files.filter((f) => !okFile(f.replace(/\/$/, '')));
+        if (bad.length) warnings.push(`knowledge: ${bad.join(', ')} must be paths inside the repository; left out`);
+        out.knowledge = files.filter((f) => !bad.includes(f));
+        break;
+      }
       case 'rules':
         out.rules = (Array.isArray(v) ? v : [])
           .filter((r) => r && typeof r === 'object' && str(r.name, 80))
@@ -387,7 +400,7 @@ export class Autopilot {
     const { text, sha, from } = await this.#configText(project);
     const { config: c, warnings } = parseConfig(text);
     const d = this.store.data;
-    for (const k of ['baseBranch', 'branchTemplate', 'prTitle', 'setup', 'preview', 'checks', 'protectedPaths', 'delivery', 'pushBase', 'autopilot']) if (k in c) project[k] = c[k];
+    for (const k of ['baseBranch', 'branchTemplate', 'prTitle', 'setup', 'preview', 'checks', 'protectedPaths', 'delivery', 'pushBase', 'autopilot', 'lead', 'analyst', 'knowledge']) if (k in c) project[k] = c[k];
     if ('upstream' in c) project.upstream = c.upstream ? { ...(project.upstream?.url === c.upstream.url ? project.upstream : {}), ...c.upstream } : null;
     if ('backlog' in c) project.backlog = c.backlog ? { ...(project.backlog || {}), ...c.backlog } : null;
     if (c.memory) {
@@ -420,6 +433,8 @@ export class Autopilot {
     project.configStale = false;
     this.last.delete(`${project.id}:backlog`);
     this.store.changed();
-    return { from, applied: Object.keys(c), rules: (c.rules || []).length, warnings };
+    // A lead that was just switched on takes over what is waiting for the person right now.
+    const taken = project.lead?.decide ? this.runner.lead?.sweep(project) || [] : [];
+    return { from, applied: Object.keys(c), rules: (c.rules || []).length, warnings, lead: taken };
   }
 }

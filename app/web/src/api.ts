@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
 export type Phase = 'todo' | 'queued' | 'planning' | 'confirm' | 'building' | 'asking' | 'review' | 'merging' | 'shipping' | 'done' | 'failed' | 'closed';
-export interface Message { hidden?: boolean; id: string; role: 'user' | 'agent' | 'system' | 'event'; text: string; at: string; agentId?: string; kind?: string; error?: boolean; durationMs?: number; pending?: boolean }
+export interface Message { hidden?: boolean; id: string; role: 'user' | 'agent' | 'system' | 'event'; text: string; at: string; agentId?: string; kind?: string; error?: boolean; durationMs?: number; pending?: boolean; lead?: boolean }
 export interface Todo {
   id: string; number: number; title: string; description: string; labels: string[]; projectId: string | null; agentId: string | null;
   phase: Phase; mode: 'plan' | 'run'; plan: string; planApproved: boolean; messages: Message[]; live: string; runtime?: string;
   worktree?: string | null; branch?: string; diffStat?: string; diff?: string; stage?: 'setup' | 'verifying' | 'fixing' | 'reviewing' | null; base?: string; ref?: string; files?: string[] | null;
-  question?: { text: string; options: string[]; at: string } | null; ruleId?: string | null; parentId?: string | null; depth?: number;
+  question?: { text: string; options: string[]; at: string; recommend?: string } | null; leadPending?: { gate: string; at: string } | null; leadAsk?: { text: string; options: string[]; recommend: string; why: string; blocks?: string[] } | null; ruleId?: string | null; parentId?: string | null; depth?: number;
   pr?: { number: number; url: string; base: string; state?: string } | null; event?: { source: string; type: string; url: string; text: string } | null;
   checks?: { results: CheckResult[]; passed: boolean; fixes: number; at: string } | null; review?: { reviewer: string; summary: string; findings: Finding[]; at: string } | null; error?: string | null; createdAt: string; updatedAt: string; scheduleId?: string | null;
 }
@@ -35,6 +35,7 @@ export interface Project {
   id: string; name: string; path: string; git?: boolean; checks?: string[]; preview?: string; delivery?: 'merge' | 'pr'; memory?: { decisions: MemoryItem[]; declined: MemoryItem[] };
   baseBranch?: string; branchTemplate?: string; prTitle?: string; setup?: string; pushBase?: boolean; protectedPaths?: string[];
   autopilot?: { accept: boolean; review?: boolean; maxFiles?: number } | null; upstream?: Upstream | null;
+  lead?: { decide: boolean; ownerPaths?: string[]; maxRounds?: number } | null; analyst?: boolean; knowledge?: string[]; leadLog?: { at: string; todo: number; title: string; gate: string; decision: string; why: string }[];
   backlog?: { file: string; every?: number; maxOpen?: number; left?: number; lastError?: string | null } | null; configAt?: string; configStale?: boolean; pullError?: string | null;
 }
 export interface Schedule { id: string; title: string; description: string; projectId?: string | null; agentId?: string | null; everyMinutes: number; enabled: boolean; mode: 'plan' | 'run'; nextAt?: string; lastAt?: string }
@@ -235,6 +236,9 @@ export const actions = {
   checkPath: (path: string) => api<{ exists: boolean; git: boolean }>('GET', `/check-path?path=${encodeURIComponent(path)}`),
   rescanRuntimes: () => api('GET', '/runtimes').then(refresh),
 };
+
+/** Waiting for the person: at a gate, and not with the project's lead. */
+export const needsYou = (x: Todo) => ['confirm', 'asking', 'review', 'failed'].includes(x.phase) && !x.leadPending;
 
 export const COLUMNS: { key: string; phases: Phase[]; drop: Phase; dot: string }[] = [
   { key: 'backlog', phases: ['todo'], drop: 'todo', dot: 'var(--faint)' },
