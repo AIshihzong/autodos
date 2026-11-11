@@ -12,6 +12,7 @@ import { leadOptions, leadPrompt, parseLead, ownerHits } from './lead.js';
 import { parseConfig } from './autopilot.js';
 import { runtimes } from './runtimes.js';
 import { buildReport } from './watch.js';
+import { isLimit, limitReset } from './limits.js';
 
 process.env.AUTODOS_ALLOW_LOCAL_CHANNELS = '1';
 let srv;
@@ -1179,26 +1180,38 @@ test('lead: when its runtime cannot answer it looks again later, and only then t
   const real = srv.lead.think.bind(srv.lead);
   const delays = srv.lead.retryMs;
   srv.lead.retryMs = [50, 50];
+  const limitWait = srv.lead.limitWaitMs;
+  srv.lead.limitWaitMs = 50;
   let calls = 0;
   // Two failures, then it answers: the person never hears of it.
   srv.lead.think = async (...a) => {
-    if (++calls <= 2) throw new Error('usage limit reached');
+    if (++calls <= 2) throw new Error('claude exited with code 1');
     return real(...a);
   };
   const a = await runTodo(p.id, 'Flaky lead A', { 'deploy/a.sh': 'echo a\n' });
   await waitFor(async () => (await phaseOf(a.number)) === 'done', 30000);
   assert.equal(calls, 3);
   assert.ok(!srv.store.data.chief.some((m) => /Flaky lead A/.test(m.text) && /needs your decision|ready for your review/.test(m.text)));
+  // At a usage limit it waits for the limit to lift, however many times that takes, and never counts it as failing.
+  calls = 0;
+  srv.lead.think = async (...a) => {
+    if (++calls <= 6) throw new Error('5-hour limit reached');
+    return real(...a);
+  };
+  const c = await runTodo(p.id, 'Limited lead C', { 'deploy/c.sh': 'echo c\n' });
+  await waitFor(async () => (await phaseOf(c.number)) === 'done', 30000);
+  assert.equal(calls, 7);
+  assert.ok(!(await todoOf(c.number)).leadAsk);
   // It never answers: after the retries the person is told why, and nothing was accepted.
   srv.lead.think = async () => {
-    throw new Error('usage limit reached');
+    throw new Error('claude exited with code 1');
   };
   const b = await runTodo(p.id, 'Flaky lead B', { 'deploy/b.sh': 'echo b\n' });
   const held = await waitFor(async () => {
     const x = await todoOf(b.number);
     return x.phase === 'review' && x.leadHold && x;
   }, 30000);
-  assert.ok(held.leadAsk.failed && /could not look at this \(tried 3 times\): usage limit reached/.test(held.leadAsk.why));
+  assert.ok(held.leadAsk.failed && /could not look at this \(tried 3 times\): claude exited with code 1/.test(held.leadAsk.why));
   assert.ok(!fs.existsSync(path.join(repo, 'deploy/b.sh')));
   // The runtime is back: the same todo goes to the lead again, not to the person.
   srv.lead.think = real;
@@ -1206,6 +1219,24 @@ test('lead: when its runtime cannot answer it looks again later, and only then t
   await waitFor(async () => (await phaseOf(b.number)) === 'done', 30000);
   assert.ok(fs.existsSync(path.join(repo, 'deploy/b.sh')));
   srv.lead.retryMs = delays;
+  srv.lead.limitWaitMs = limitWait;
+});
+
+test('limits: every way a runtime says it is at its limit, and when the limit lifts', () => {
+  const at = Date.parse('2026-11-11T11:00:00Z');
+  for (const m of ['5-hour limit · resets 7:10am PT', 'Claude AI usage limit reached|1762920000', 'weekly limit reached', 'Rate limit exceeded', 'HTTP 429 Too Many Requests', 'overloaded_error']) assert.ok(isLimit(m), m);
+  for (const m of ['ENOENT: no such file', 'claude exited with code 1', 'Limited work failed the checks']) assert.ok(!isLimit(m), m);
+  const iso = (m) => new Date(limitReset(m, at)).toISOString();
+  assert.equal(iso('5-hour limit · resets 7:10am PT'), '2026-11-11T15:10:00.000Z', 'PT is UTC-8 in November');
+  assert.equal(iso('5-hour limit · resets 2:10am PT'), '2026-11-12T10:10:00.000Z', 'already past today: tomorrow');
+  assert.equal(iso('usage limit reached, resets 3pm (Europe/Berlin)'), '2026-11-11T14:00:00.000Z');
+  assert.equal(iso('resets at 12pm UTC'), '2026-11-11T12:00:00.000Z');
+  assert.equal(iso('resets 12am (America/New_York)'), '2026-11-12T05:00:00.000Z');
+  assert.equal(new Date(limitReset('resets 7:10am PT', Date.parse('2026-07-01T11:00:00Z'))).toISOString(), '2026-07-01T14:10:00.000Z', 'PDT is UTC-7 in summer');
+  assert.equal(iso('Claude AI usage limit reached|1794412800'), '2026-11-11T16:00:00.000Z');
+  assert.equal(limitReset('Claude AI usage limit reached|1762837200', at), 0, 'a moment already past says nothing');
+  assert.equal(limitReset('weekly limit · resets Nov 14', at), 0);
+  assert.equal(limitReset('resets 25:00 UTC', at), 0);
 });
 
 test('runs: a resumed session is charged for its turn, not its whole history; a usage limit waits and retries by itself', async () => {
@@ -1249,6 +1280,29 @@ test('runs: a resumed session is charged for its turn, not its whole history; a 
     await waitFor(async () => (await phaseOf(l2.number)) === 'review', 30000);
     assert.ok(!(await todoOf(l2.number)).capacity);
     await call('POST', `/todos/${l2.number}/action`, { action: 'close' });
+    // It says when it lifts: the todo waits until exactly then (a minute more), not for the fixed waits.
+    const soon = new Date(Date.now() + 3 * 60_000);
+    const hhmm = `${soon.getUTCHours()}:${String(soon.getUTCMinutes()).padStart(2, '0')}`;
+    runtimes.demo.run = async (a) => {
+      if (/Told when/.test(a.title)) throw new Error(`5-hour limit · resets ${hhmm} (UTC)`);
+      return real(a);
+    };
+    const { body: w } = await call('POST', '/todos', { title: 'Told when', projectId: p.id, start: true });
+    const told = await waitFor(async () => {
+      const x = await todoOf(w.number);
+      return x.capacity && x;
+    }, 30000);
+    assert.equal(told.phase, 'queued');
+    assert.ok(told.capacity.reset);
+    const until = Date.parse(told.capacity.until);
+    const minute = Math.floor(soon.getTime() / 60_000) * 60_000;
+    assert.ok(until >= minute + 60_000 - 1000 && until <= minute + 60_000 + 1000, told.capacity.until);
+    await call('POST', `/todos/${w.number}/action`, { action: 'close' });
+    runtimes.demo.run = async (a) => {
+      if (['review', 'chief'].includes(a.kind)) return real(a);
+      if (/Limited/.test(a.title) && refuse-- > 0) throw new Error('Claude AI usage limit reached|1762837200');
+      return real(a);
+    };
     // It never lifts: after the waits it fails like any other error.
     refuse = 99;
     const { body: n } = await call('POST', '/todos', { title: 'Limited forever', projectId: p.id, start: true });

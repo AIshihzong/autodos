@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import { id, now } from './store.js';
 import { runtimes, resolveRuntime, detectRuntimes } from './runtimes.js';
 import { prepareEvidence, collectEvidence, proofNote } from './evidence.js';
+import { isLimit, limitReset } from './limits.js';
 import { runCheck, runChecks, fixPrompt, reviewPrompt, parseReview, reviewFixPrompt, memoryBlock, changedFiles, autoFixable, protectedHits, REVIEW_LIMIT } from './quality.js';
 import { ensureWorktree, commitAll, landBranch, removeWorktree, diffStat, diffText, diffFiles, diffTruncated, baseOf, baseRef, branchName, isGitRepo, git } from './git.js';
 
@@ -406,16 +407,19 @@ export class Runner extends EventEmitter {
    * in the queue and runs again by itself, a few times with growing pauses, before it counts as failed.
    */
   #waitForCapacity(t, message, pending) {
-    if (!/usage limit|rate[ _-]?limit|limit reached|hit your limit|out of (extra )?usage|quota|overloaded|too many requests|\b(429|529)\b/i.test(message)) return false;
+    if (!isLimit(message)) return false;
     const tries = (t.capacity?.tries || 0) + 1;
-    const wait = this.capacityWaitMs[tries - 1];
+    // When the runtime says when the limit lifts, wait exactly that long (a minute more), however often it happens:
+    // a subscription's limit always lifts. Without a time, back off and give up after a few tries.
+    const reset = limitReset(message);
+    const wait = reset ? reset - Date.now() + 60_000 : this.capacityWaitMs[tries - 1];
     if (wait === undefined) {
       delete t.capacity;
       return false;
     }
-    t.capacity = { tries, until: new Date(Date.now() + wait).toISOString() };
+    t.capacity = { tries, until: new Date(Date.now() + wait).toISOString(), ...(reset ? { reset: true } : {}) };
     pending.forEach((m) => (m.pending = true)); // what the person said still has to reach the agent
-    this.addMessage(t, 'system', `The agent's runtime is at its usage limit. Waiting and trying again at ${t.capacity.until} (attempt ${tries} of ${this.capacityWaitMs.length}); nothing is needed from you.`, { kind: 'capacity' });
+    this.addMessage(t, 'system', reset ? `The agent's runtime is at its usage limit until ${new Date(reset).toISOString()}. It carries on by itself after that; nothing is needed from you.` : `The agent's runtime is at its usage limit. Waiting and trying again at ${t.capacity.until} (attempt ${tries} of ${this.capacityWaitMs.length}); nothing is needed from you.`, { kind: 'capacity' });
     this.setPhase(t, 'queued');
     return true;
   }

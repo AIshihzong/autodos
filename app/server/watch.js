@@ -55,7 +55,7 @@ export function buildReport(project, data, { since = '', at = Date.now(), quietH
   section(L.landed, landed.map(ref));
   section(L.stuck, stuck.map((t) => `${ref(t)}: ${L.rounds(t.leadRounds)}${lastWhy(t) ? `. ${one(lastWhy(t), 200)}` : ''}`));
   section(L.moving, moving.filter((t) => !stuck.includes(t)).map((t) => `${ref(t)} · ${stage(t)}`));
-  section(L.lead, withLead.filter((t) => !stuck.includes(t)).map(ref));
+  section(L.lead, withLead.filter((t) => !stuck.includes(t)).map((t) => (t.leadPending?.until && Date.parse(t.leadPending.until) > at ? `${ref(t)} · ${L.cap} · ${L.until} ${t.leadPending.until.slice(11, 16)} UTC` : ref(t))));
   section(L.cap, waitingCapacity.map((t) => `${ref(t)} · ${L.until} ${t.capacity.until.slice(11, 16)} UTC`));
   if (decided.length) {
     const by = {};

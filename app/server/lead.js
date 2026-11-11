@@ -4,6 +4,7 @@
 // money, and things that cannot be undone. Everything it decides is written on the todo and in the project's log.
 import { id, now } from './store.js';
 import { runtimes, resolveRuntime } from './runtimes.js';
+import { isLimit, limitReset } from './limits.js';
 import { memoryBlock, protectedHits, globMatch, CONFIG_FILE } from './quality.js';
 
 /** Gates a lead can stand at. */
@@ -165,15 +166,26 @@ export class Lead {
     this.store = store;
     this.runner = runner;
     this.retryMs = RETRY_MS;
+    this.limitWaitMs = 30 * 60_000; // at a usage limit that does not say when it lifts
     this.deciding = new Map(); // todoId -> token
     runner.lead = this;
     runner.on('phase', (t) => t.leadPending && this.#decide(t).catch(() => {}));
     this.timer = setInterval(() => this.patrol(), 5 * 60_000);
     this.timer.unref?.();
-    // Gates the lead was standing at when the app quit.
+    // Gates the lead was standing at when the app quit; one that was waiting for a limit to lift waits on.
     setImmediate(() => {
-      for (const t of store.data.todos) if (t.leadPending) this.#decide(t).catch(() => {});
+      for (const t of store.data.todos) if (t.leadPending) this.#later(t, Date.parse(t.leadPending.until || '') - Date.now() || 0);
     });
+  }
+
+  /** Look at this visit again after `wait` ms (now, when it is not ahead). */
+  #later(t, wait) {
+    const visit = t.leadPending?.at;
+    const gate = t.phase;
+    const go = () => t.leadPending?.at === visit && t.phase === gate && this.#decide(t).catch(() => {});
+    if (!(wait > 0)) return void go();
+    const timer = setTimeout(go, Math.min(wait, 2 ** 31 - 1));
+    timer.unref?.();
   }
 
   /** Whether the lead stands at this gate first. Called by the runner as the todo arrives there. */
@@ -252,15 +264,17 @@ export class Lead {
       out = await this.think(t, project, options, t.leadRounds || 0);
     } catch (e) {
       // The lead's runtime could not answer. That is not the customer's problem yet: look again in a while.
-      const tries = (t.leadPending?.tries || 0) + 1;
-      const wait = this.retryMs[tries - 1];
+      // At a usage limit it waits for the limit to lift, however long that is; other failures are tried a few times.
+      const limited = isLimit(e.message);
+      const reset = limited ? limitReset(e.message) : 0;
+      const tries = (t.leadPending?.tries || 0) + (limited ? 0 : 1);
+      const waits = (t.leadPending?.waits || 0) + (limited ? 1 : 0);
+      const wait = reset ? reset - Date.now() + 60_000 : limited ? (waits <= 24 ? this.limitWaitMs : undefined) : this.retryMs[tries - 1];
       if (wait !== undefined && this.deciding.get(t.id) === token && t.leadPending?.at === visit && t.phase === gate) {
-        t.leadPending.tries = tries;
-        t.leadPending.error = String(e.message).slice(0, 200);
+        Object.assign(t.leadPending, { tries, waits, error: String(e.message).slice(0, 200), until: new Date(Date.now() + wait).toISOString() });
         this.deciding.delete(t.id);
         this.store.changed();
-        const timer = setTimeout(() => t.leadPending?.at === visit && t.phase === gate && this.#decide(t).catch(() => {}), wait);
-        timer.unref?.();
+        this.#later(t, wait);
         return;
       }
       out = { decision: 'escalate', failed: true, why: `The lead could not look at this (tried ${tries} times): ${String(e.message).slice(0, 200)}`, ask: '', options: [], recommend: '' };
