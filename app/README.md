@@ -18,6 +18,14 @@ npm run check:desktop             # open the desktop app, check the board loaded
 
 Data lives in `~/.autodos/` (`db.json`, per-todo `worktrees/`, `scratch/` for todos without a project). Set `AUTODOS_DATA` to use another folder, `PORT` to change the web port.
 
+### Keeping it up to date
+
+Run from a git checkout, Autodos can update itself: Settings, "Keep Autodos up to date by itself" (or `AUTODOS_SELF_UPDATE=1`). It is off until you turn it on, because it means running whatever the branch's remote has. Every ten minutes it looks at the remote of the branch it is on and takes only a plain fast-forward of a clean checkout; local commits or edited files mean it leaves the checkout alone and says so in Settings.
+
+- The new version is first built and started beside the running one, in its own worktree, with an empty data folder and its own port. One that does not build or answer is never switched to. It is tried three times, then left until there is a newer commit.
+- The switch waits for a quiet moment: once an update is ready no new turn starts, the turns, merges and decisions under way finish, then it goes in. Work that takes more than an hour is not waited for; the team carries on and the update tries again later.
+- A small separate process does the switch-over. It starts the new version the way the old one was started (same command, port, environment and log), and when that does not answer within a minute it puts the previous commit and its built files back and starts that instead. Settings then says the update was taken out again.
+
 ## How a todo moves
 
 | Phase | Column | What happens |
@@ -185,7 +193,7 @@ The server binds to `127.0.0.1` only, and refuses write requests that come from 
 ## Layout
 
 ```
-server/   Node HTTP API, SSE events, todo lifecycle (runner.js), Lead (chief.js), runtimes, git worktrees, unattended projects (autopilot.js)
+server/   Node HTTP API, SSE events, todo lifecycle (runner.js), Lead (chief.js), runtimes, git worktrees, unattended projects (autopilot.js), self-update (selfupdate.js, handover.js)
 web/      React + Vite UI (board, Lead chat, todo drawer, ⌘K palette, agents, projects, schedules, usage, settings; EN/中文; light/dark)
 src-tauri/  Tauri shell: starts or reuses the server, folder picker, notifications, dock badge, outside links
 mcp/      stdio MCP server

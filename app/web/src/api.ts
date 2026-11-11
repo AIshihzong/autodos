@@ -46,7 +46,8 @@ export interface FileEntry { name: string; dir: boolean; path: string }
 export interface Commit { hash: string; author: string; date: string; subject: string }
 export interface Run { id: string; todoId: string; number: number; agentId?: string; runtime: string; kind: string; ok: boolean; startedAt: string; durationMs: number; inputTokens: number; outputTokens: number; costUsd: number; costKnown?: boolean }
 export interface Runtime { id: string; name: string; available: boolean; version: string }
-export interface Settings { concurrency: number; defaultRuntime: string; chiefRuntime: string; claudePermissionMode: string; codexSandbox?: string; useWorktrees: boolean; autoStart: boolean; planFirst: boolean; verify: boolean; verifyAttempts: number; reviewer: string; reviewAutoFix: boolean; budgetMinutes: number; budgetUsd: number; publicUrl?: string; delegateDepth: number; delegateChildren: number; steer?: boolean }
+export interface Settings { concurrency: number; defaultRuntime: string; chiefRuntime: string; claudePermissionMode: string; codexSandbox?: string; useWorktrees: boolean; autoStart: boolean; planFirst: boolean; verify: boolean; verifyAttempts: number; reviewer: string; reviewAutoFix: boolean; budgetMinutes: number; budgetUsd: number; publicUrl?: string; delegateDepth: number; delegateChildren: number; steer?: boolean; selfUpdate?: boolean }
+export interface UpdateStatus { possible: boolean; enabled: boolean; checkedAt: string; current: string; available: string; count: number; waiting: boolean; error: string; skipped: string; updatedAt: string; from: string; checking?: boolean }
 export interface State {
   settings: Settings; projects: Project[]; agents: Agent[]; todos: Todo[]; chief: ChiefMessage[]; requirements?: Requirement[]; chiefBusy: boolean; topics: Topic[]; mcpPath: string;
   workers: Worker[]; pairings: { code: string; words: string[]; host: string; name: string }[]; previews: { todoId: string; url: string; ready: boolean }[]; rules: Rule[]; sources: Source[]; events: EventRec[]; channels: Channel[]; runs: Run[]; runtimes: Runtime[]; dataDir: string; feishu: Feishu;
@@ -201,6 +202,8 @@ export const actions = {
   stopPreview: (id: string) => api('DELETE', `/todos/${id}/preview`),
   detectChecks: (id: string) => api<string[]>('GET', `/projects/${id}/detect-checks`),
   syncUpstream: (id: string) => api<{ state: string; lastTodo?: number }>('POST', `/projects/${id}/sync`, {}),
+  updateStatus: () => api<UpdateStatus>('GET', '/update'),
+  updateNow: () => api<UpdateStatus>('POST', '/update', {}),
   loadConfig: (id: string) => api<{ from: string; applied: string[]; rules: number; warnings: string[] }>('POST', `/projects/${id}/load-config`, {}),
   remember: (project: Project, kind: 'decisions' | 'declined', text: string, todo?: number) => api('POST', `/projects/${project.id}/memory`, { kind, text, todo }),
   forget: (project: Project, kind: 'decisions' | 'declined', text: string) => api('DELETE', `/projects/${project.id}/memory`, { kind, text }),

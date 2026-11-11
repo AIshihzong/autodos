@@ -1,6 +1,6 @@
 // Team (members and machines) and Settings, built from a few shared pieces: Group, Row, Switch, Select.
 import { useEffect, useRef, useState } from 'react';
-import { actions, Agent, ago, State, Todo } from './api';
+import { actions, Agent, ago, State, Todo, UpdateStatus } from './api';
 import { todoKey } from './Board';
 import { Lang, useLang, useT } from './i18n';
 import { Avatar, Icon } from './icons';
@@ -421,6 +421,7 @@ export function SettingsPage({ state, theme, setTheme, lang, setLang, font, setF
                 <Switch label={t.worktrees} checked={s.useWorktrees} onChange={(v) => set({ useWorktrees: v })} />
               </Row>
             </Group>
+            <SelfUpdateGroup on={!!s.selfUpdate} set={(v) => set({ selfUpdate: v })} />
           </>
         )}
 
@@ -556,5 +557,37 @@ export function SettingsPage({ state, theme, setTheme, lang, setLang, font, setF
         )}
       </div>
     </div>
+  );
+}
+
+/** Autodos updating itself. Only shown where it can: a git checkout, not the packaged app. */
+function SelfUpdateGroup({ on, set }: { on: boolean; set: (v: boolean) => void }) {
+  const t = useT();
+  const lang = useLang();
+  const [st, setSt] = useState<UpdateStatus | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => actions.updateStatus().then((x) => live && setSt(x), () => {});
+    load();
+    const timer = setInterval(load, 10_000);
+    return () => ((live = false), clearInterval(timer));
+  }, []);
+  if (!st?.possible) return null;
+  const short = (x: string) => x.slice(0, 7);
+  const lines = [
+    st.current && t.updateCurrent.replace('{sha}', short(st.current)),
+    st.available && (st.waiting ? t.updateWaiting : t.updateAvailable).replace('{sha}', short(st.available)),
+    st.updatedAt && st.from && t.updateDone.replace('{sha}', short(st.from)).replace('{when}', ago(st.updatedAt, lang)),
+    st.error || st.skipped,
+  ].filter(Boolean);
+  return (
+    <Group>
+      <Row label={t.selfUpdate} sub={t.selfUpdateSub}>
+        <Switch label={t.selfUpdate} checked={on} onChange={set} />
+      </Row>
+      <Row label={<span className="muted">{lines.join(' · ')}</span>}>
+        <button className="btn" onClick={() => actions.updateNow().then(setSt, () => {})}>{t.updateNow}</button>
+      </Row>
+    </Group>
   );
 }

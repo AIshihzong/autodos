@@ -9,6 +9,8 @@ import { Runner, PHASES } from './runner.js';
 import { Chief, newTodo, pickAgent, labelsFor } from './chief.js';
 import { Lead } from './lead.js';
 import { Watch } from './watch.js';
+import { SelfUpdate } from './selfupdate.js';
+import { spawn } from 'node:child_process';
 import { detectRuntimes } from './runtimes.js';
 import { diagnose, fix as fixCheck, fixJobs } from './doctor.js';
 import { FeishuLink } from './feishu.js';
@@ -40,6 +42,14 @@ export function createApp({ dataDir } = {}) {
   const lead = new Lead(store, runner);
   const chief = new Chief(store, runner);
   const watch = new Watch(store, runner, chief);
+  const update = new SelfUpdate({
+    store,
+    idle: () => !runner.running.size && !runner.landings && !lead.deciding.size && !chief.busy && !store.data.todos.some((t) => ['merging', 'shipping'].includes(t.phase) || t.completing),
+    hold: (on) => {
+      runner.hold = on;
+      if (!on) runner.pump();
+    },
+  });
   const feishu = new FeishuLink({ store, runner, chief, publicUrl: () => store.data.settings.publicUrl || '' });
   const clients = new Set();
 
@@ -153,10 +163,17 @@ export function createApp({ dataDir } = {}) {
       const dir = url.searchParams.get('path') || '';
       return { exists: fs.existsSync(dir) && fs.statSync(dir).isDirectory(), git: await isGitRepo(dir) };
     }
+    if (res === 'update' && method === 'GET') return update.status();
+    // The person asks for it now, whether or not it is switched on.
+    if (res === 'update' && method === 'POST') {
+      update.tick({ force: true }).catch(() => {});
+      return { ...update.status(), checking: true };
+    }
     if (res === 'settings' && method === 'PATCH') {
       Object.assign(store.data.settings, body);
       store.changed();
       runner.pump();
+      if ('selfUpdate' in body) update.tick().catch(() => {});
       return store.data.settings;
     }
     if (res === 'chief' && method === 'POST') {
@@ -709,9 +726,10 @@ export function createApp({ dataDir } = {}) {
     autopilot.close();
     workers.close();
     rules.close();
+    update.close();
     store.flush();
   });
-  return { server, store, runner, chief, lead, watch, feishu, delivery, previews, workers, rules, autopilot };
+  return { server, store, runner, chief, lead, watch, update, feishu, delivery, previews, workers, rules, autopilot };
 }
 
 export function startServer({ port = Number(process.env.PORT) || 4747, host = '127.0.0.1', dataDir } = {}) {
@@ -727,8 +745,20 @@ export function startServer({ port = Number(process.env.PORT) || 4747, host = '1
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  const { port, store } = await startServer();
+  const { port, store, server, update } = await startServer();
   console.log(`Autodos is running at http://localhost:${port}  (data: ${store.dir})`);
+  // After a self-update: hand over to a small process that starts the new version (and puts this one back
+  // when the new one does not come up), then leave.
+  update.restart = async ({ from, to, swaps }) => {
+    const job = { pid: process.pid, from, to, swaps, port, repo: update.repo, cwd: process.cwd(), exec: process.execPath, execArgv: process.execArgv, argv: process.argv.slice(1) };
+    console.log(`Autodos is updating itself to ${to.slice(0, 7)} and restarting`);
+    await new Promise((done) => {
+      server.close(done);
+      server.closeAllConnections?.();
+    });
+    spawn(process.execPath, [path.join(here, 'handover.js')], { cwd: process.cwd(), env: { ...process.env, AUTODOS_HANDOVER: JSON.stringify(job) }, detached: true, stdio: 'inherit', windowsHide: true }).unref();
+    process.exit(0);
+  };
   const bye = () => (store.flush(), process.exit(0));
   process.on('SIGINT', bye);
   process.on('SIGTERM', bye);

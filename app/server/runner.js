@@ -316,7 +316,8 @@ export class Runner extends EventEmitter {
 
   /** One at a time per project for anything that moves its base branch (the merge queue, upstream sync). */
   landing(projectId, fn) {
-    const run = (this.#locks.get(projectId) || Promise.resolve()).then(fn, fn);
+    this.landings = (this.landings || 0) + 1;
+    const run = (this.#locks.get(projectId) || Promise.resolve()).then(fn, fn).finally(() => (this.landings -= 1));
     this.#locks.set(projectId, run.catch(() => {}));
     return run;
   }
@@ -373,6 +374,8 @@ export class Runner extends EventEmitter {
   // ---------- the queue ----------
 
   pump() {
+    // An update of Autodos itself is ready (selfupdate.js): what is under way finishes, nothing new starts.
+    if (this.hold) return;
     const d = this.store.data;
     const limit = Math.max(1, Number(d.settings.concurrency) || 1);
     const queued = d.todos.filter((t) => t.phase === 'queued').sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
