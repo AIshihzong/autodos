@@ -343,6 +343,13 @@ export function createApp({ dataDir } = {}) {
             if (!String(body.text || '').trim()) throw new HttpError(400, 'Empty answer');
             runner.reply(t, `Answer to your question “${t.question?.text || ''}”: ${String(body.text).trim()}`);
             break;
+          case 'lead': // hand it back to the project's lead
+            try {
+              lead.again(t);
+            } catch (e) {
+              throw new HttpError(400, e.message);
+            }
+            break;
           case 'reopen':
             runner.move(t, t.plan && !t.planApproved ? 'confirm' : 'review');
             break;

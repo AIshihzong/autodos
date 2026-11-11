@@ -145,10 +145,14 @@ export function demoLead(t, { allowed }, rounds) {
   return { decision: 'escalate', why: 'This one needs the customer.', ask: `#${t.number} ${t.title}: accept this change?`, options: ['Accept', 'Send back'], recommend: '' };
 }
 
+/** How long the lead waits before looking again when its runtime could not answer (a limit reached, the CLI failing). */
+const RETRY_MS = [60_000, 5 * 60_000, 15 * 60_000];
+
 export class Lead {
   constructor(store, runner) {
     this.store = store;
     this.runner = runner;
+    this.retryMs = RETRY_MS;
     this.deciding = new Map(); // todoId -> token
     runner.lead = this;
     runner.on('phase', (t) => t.leadPending && this.#decide(t).catch(() => {}));
@@ -170,13 +174,44 @@ export class Lead {
   sweep(project) {
     const taken = [];
     for (const t of this.store.data.todos) {
-      if (t.projectId !== project.id || t.leadPending || this.runner.busy(t) || !this.takes(t, t.phase)) continue;
+      if (t.projectId !== project.id || t.leadPending || this.runner.busy(t)) continue;
+      // Passed on only because the lead could not look at all: that was never a decision, so it looks now.
+      if (t.leadHold && t.leadAsk?.failed && project.lead?.decide) this.#release(t);
+      if (!this.takes(t, t.phase)) continue;
       t.leadPending = { gate: t.phase, at: now() };
       taken.push(t.number);
       this.#decide(t).catch(() => {});
     }
     if (taken.length) this.store.changed();
     return taken;
+  }
+
+  #release(t) {
+    delete t.leadHold;
+    delete t.leadAsk;
+    t.leadRounds = 0;
+  }
+
+  /** Hand a todo the person holds back to the lead: after the lead could not look, or when they want its call after all. */
+  again(t) {
+    const project = this.store.project(t.projectId);
+    if (!project?.lead?.decide) throw new Error('This project has no lead');
+    if (!LEAD_GATES.includes(t.phase) || this.runner.busy(t)) throw new Error('The lead looks at todos that wait at a gate');
+    if (t.leadPending) return t;
+    this.#release(t);
+    t.leadPending = { gate: t.phase, at: now() };
+    this.store.changed();
+    this.#decide(t).catch(() => {});
+    return t;
+  }
+
+  /** The lead's call on a gate: the model's, or the obvious one on the demo runtime. */
+  async think(t, project, options, rounds) {
+    const d = this.store.data;
+    const runtimeId = resolveRuntime(d.settings.chiefRuntime);
+    if (runtimeId === 'demo') return demoLead(t, options, rounds);
+    const res = await runtimes[runtimeId].run({ prompt: leadPrompt(t, project, options, rounds), kind: 'chief', cwd: t.worktree || project?.path || this.store.dir, settings: d.settings });
+    return parseLead(res.text, options.allowed) || { decision: 'escalate', why: 'The lead could not reach a decision.', ask: '', options: [], recommend: '' };
   }
 
   async #decide(t) {
@@ -192,16 +227,21 @@ export class Lead {
     let options = { allowed: ['escalate'], blocks: [] };
     try {
       options = leadOptions(t, project, d.settings, d.projects.filter((p) => p.id !== project?.id));
-      const rounds = t.leadRounds || 0;
-      const runtimeId = resolveRuntime(d.settings.chiefRuntime);
-      if (runtimeId === 'demo') out = demoLead(t, options, rounds);
-      else {
-        const res = await runtimes[runtimeId].run({ prompt: leadPrompt(t, project, options, rounds), kind: 'chief', cwd: t.worktree || project?.path || this.store.dir, settings: d.settings });
-        out = parseLead(res.text, options.allowed);
-        if (!out) out = { decision: 'escalate', why: 'The lead could not reach a decision.', ask: '', options: [], recommend: '' };
-      }
+      out = await this.think(t, project, options, t.leadRounds || 0);
     } catch (e) {
-      out = { decision: 'escalate', why: `The lead could not look at this: ${String(e.message).slice(0, 200)}`, ask: '', options: [], recommend: '' };
+      // The lead's runtime could not answer. That is not the customer's problem yet: look again in a while.
+      const tries = (t.leadPending?.tries || 0) + 1;
+      const wait = this.retryMs[tries - 1];
+      if (wait !== undefined && this.deciding.get(t.id) === token && t.leadPending?.at === visit && t.phase === gate) {
+        t.leadPending.tries = tries;
+        t.leadPending.error = String(e.message).slice(0, 200);
+        this.deciding.delete(t.id);
+        this.store.changed();
+        const timer = setTimeout(() => t.leadPending?.at === visit && t.phase === gate && this.#decide(t).catch(() => {}), wait);
+        timer.unref?.();
+        return;
+      }
+      out = { decision: 'escalate', failed: true, why: `The lead could not look at this (tried ${tries} times): ${String(e.message).slice(0, 200)}`, ask: '', options: [], recommend: '' };
     }
     // The turn that brought the todo here may still be letting go of it.
     for (let i = 0; i < 200 && this.runner.running.has(t.id) && t.phase === gate; i++) await new Promise((r) => setTimeout(r, 50));
@@ -233,7 +273,7 @@ export class Lead {
     const say = (text, extra = {}) => r.addMessage(t, 'system', text, { kind: 'lead', ...extra });
     if (out.decision === 'escalate') {
       t.leadHold = true;
-      t.leadAsk = { text: out.ask || '', options: out.options || [], recommend: out.recommend || '', why: out.why || '', blocks: options.blocks || [], at: now() };
+      t.leadAsk = { text: out.ask || '', options: out.options || [], recommend: out.recommend || '', why: out.why || '', blocks: options.blocks || [], at: now(), ...(out.failed ? { failed: true } : {}) };
       if (gate === 'asking' && out.ask) t.question = { ...(t.question || {}), original: t.question?.original || t.question?.text, text: out.ask, options: out.options?.length ? out.options : t.question?.options || [], recommend: out.recommend || '', at: now() };
       say(`The lead passed this on to you${out.why ? `: ${out.why}` : '.'}${out.ask ? `\n${out.ask}` : ''}${out.recommend ? `\nThe lead suggests: ${out.recommend}` : ''}`);
       log('escalate');

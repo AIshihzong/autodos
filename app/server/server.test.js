@@ -1156,3 +1156,39 @@ test('lead: a todo that belongs to another project can be moved there, never to 
   assert.equal(parseLead('{"decision":"move","project":"Canvas app","why":"the code is there"}', o.allowed).project, 'Canvas app');
   assert.equal(parseLead('{"decision":"move","why":"somewhere else"}', o.allowed), null);
 });
+
+test('lead: when its runtime cannot answer it looks again later, and only then tells the person; the todo can be handed back', async () => {
+  const repo = mkRepo('repo-lead3');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  await call('PATCH', `/projects/${p.id}`, { protectedPaths: ['deploy/*'], autopilot: { accept: true }, lead: { decide: true } });
+  const real = srv.lead.think.bind(srv.lead);
+  const delays = srv.lead.retryMs;
+  srv.lead.retryMs = [50, 50];
+  let calls = 0;
+  // Two failures, then it answers: the person never hears of it.
+  srv.lead.think = async (...a) => {
+    if (++calls <= 2) throw new Error('usage limit reached');
+    return real(...a);
+  };
+  const a = await runTodo(p.id, 'Flaky lead A', { 'deploy/a.sh': 'echo a\n' });
+  await waitFor(async () => (await phaseOf(a.number)) === 'done', 30000);
+  assert.equal(calls, 3);
+  assert.ok(!srv.store.data.chief.some((m) => /Flaky lead A/.test(m.text) && /needs your decision|ready for your review/.test(m.text)));
+  // It never answers: after the retries the person is told why, and nothing was accepted.
+  srv.lead.think = async () => {
+    throw new Error('usage limit reached');
+  };
+  const b = await runTodo(p.id, 'Flaky lead B', { 'deploy/b.sh': 'echo b\n' });
+  const held = await waitFor(async () => {
+    const x = await todoOf(b.number);
+    return x.phase === 'review' && x.leadHold && x;
+  }, 30000);
+  assert.ok(held.leadAsk.failed && /could not look at this \(tried 3 times\): usage limit reached/.test(held.leadAsk.why));
+  assert.ok(!fs.existsSync(path.join(repo, 'deploy/b.sh')));
+  // The runtime is back: the same todo goes to the lead again, not to the person.
+  srv.lead.think = real;
+  assert.equal((await call('POST', `/todos/${b.number}/action`, { action: 'lead' })).status, 200);
+  await waitFor(async () => (await phaseOf(b.number)) === 'done', 30000);
+  assert.ok(fs.existsSync(path.join(repo, 'deploy/b.sh')));
+  srv.lead.retryMs = delays;
+});
