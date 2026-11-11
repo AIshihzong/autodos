@@ -151,6 +151,12 @@ By default every question an agent asks, every plan and every finished change co
 
 The lead and the analyst run on the runtime chosen for the lead (Settings), read-only.
 
+Three things you are never asked, whether or not a project has a lead:
+
+- **Which project.** A message sent without a project picked (from the conversation with all projects shown, or from Feishu) goes to the project it names; else to the one the conversation is already about; else to the only project that has its own team; else to the one worked on most recently. With several projects the reply says where it went.
+- **"Was that an answer?"** When a todo is waiting on a question and you simply reply in the conversation, your words go to that todo and it carries on; no new todo is made. Start with `#12` to answer a particular one. A long message, or one that starts with "new request", is a request of its own.
+- **Starting over somewhere else.** Changing a todo's project (the drawer, or the lead's decision "move" when an engineer asks which repository to work in) starts it over in the right project. What it wrote in the old place is left as it is: a worktree that holds work keeps its branch.
+
 ## Agents and runtimes
 
 Each agent has a name, a role (used by the Lead to assign work), a runtime (`Claude Code`, `Codex`, `Demo`, or the default) and an optional model. Claude Code runs with `--permission-mode acceptEdits` by default; switch to `bypassPermissions` in Settings if agents need to run commands unattended. Codex runs in its `workspace-write` sandbox by default (no network, `.git` read-only); *Codex sandbox* in Settings can open the network or remove the sandbox, which a project needs when its agents install dependencies or finish a `git merge` themselves. A Claude session is resumed on every revision, so replies keep their context.

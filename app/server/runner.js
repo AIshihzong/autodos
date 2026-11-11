@@ -164,6 +164,34 @@ export class Runner extends EventEmitter {
     this.store.changed();
   }
 
+  /**
+   * The todo was filed against the wrong project: start it over in the right one.
+   * Nothing it wrote in the old place is deleted: an untouched worktree goes, one that holds work stays with its branch.
+   */
+  async transfer(t, project, { by = '' } = {}) {
+    if (!project) throw new Error('Unknown project');
+    if (this.busy(t)) throw new Error("A todo that is queued or running can't change project; stop it first");
+    const from = this.store.project(t.projectId);
+    if (from?.id === project.id) return t;
+    if (t.phase === 'done') throw new Error('A finished todo stays in its project');
+    if (from && t.worktree) {
+      const ahead = await diffFiles(from.path, t.branch, t.base).catch(() => ['?']);
+      const dirty = await git(t.worktree, ['status', '--porcelain']).catch(() => '?');
+      if (!ahead.length && !dirty) await removeWorktree(from.path, t.worktree, t.branch, true);
+    }
+    const started = t.phase !== 'todo';
+    // Everything that described the work in the old project: the next turn starts clean in the new one.
+    for (const k of ['worktree', 'branch', 'base', 'setupDone', 'sessionId', 'sessionMachine', 'files', 'diff', 'diffStat', 'checks', 'checkLog', 'review', 'evidence', 'question', 'revision', 'stage', 'gateReason', 'leadPending', 'leadAsk', 'leadHold', 'autoAccepting', 'autoAccepted', 'remoteJob', 'mergeLanded', 'mergeQueuedAt']) delete t[k];
+    t.plan = '';
+    t.planApproved = false;
+    t.error = null;
+    t.projectId = project.id;
+    this.addMessage(t, 'system', `${by ? `The ${by} moved` : 'Moved'} this from “${from?.name || 'no project'}” to “${project.name}”. It starts over there; anything written in the old place was left as it is.`, by ? { kind: by } : {});
+    if (started && t.phase !== 'closed') this.start(t);
+    this.store.changed();
+    return t;
+  }
+
   /** Manual phase change from the board. Only resting phases can be set by hand. */
   move(t, phase) {
     if (this.busy(t)) throw new Error("A todo that is queued or running can't be moved; stop it first");

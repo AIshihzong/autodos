@@ -380,7 +380,7 @@ export function TodoDrawer({ state, id, onClose, onOpen }: { state: State; id: s
           </label>
           <label>
             <Icon name="folder" size={15} />
-            <select value={todo.projectId || ''} disabled={!!todo.worktree} onChange={(e) => actions.updateTodo(todo.id, { projectId: e.target.value || null })}>
+            <select value={todo.projectId || ''} disabled={['queued', 'planning', 'building', 'merging', 'done'].includes(todo.phase)} onChange={(e) => actions.updateTodo(todo.id, { projectId: e.target.value || null })}>
               <option value="">{t.noProject}</option>
               {state.projects.map((p) => (
                 <option key={p.id} value={p.id}>

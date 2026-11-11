@@ -1,4 +1,5 @@
 // The Lead: one standing conversation that turns requests into todos and reports back.
+import path from 'node:path';
 import { id, now } from './store.js';
 import { runtimes, resolveRuntime } from './runtimes.js';
 import { memoryBlock } from './quality.js';
@@ -73,6 +74,33 @@ export function splitRequest(text) {
     return { title: title.charAt(0).toUpperCase() + title.slice(1), description: s.length > 90 ? s : '' };
   });
 }
+
+/**
+ * Which project a message is about when the person did not pick one. Never a question for them:
+ * the one they name, else the one this conversation is already about, else the only one with its own
+ * team (a lead or an analyst), else the one worked on most recently.
+ */
+export function pickProject(projects, todos, text, topic) {
+  if (!projects?.length) return null;
+  if (projects.length === 1) return projects[0];
+  const s = String(text || '').toLowerCase();
+  // The longest name found in the message wins ("docs-site" over "docs"); a tie leaves the rest to decide.
+  const hit = (p) => Math.max(0, ...[p.name, p.path && path.basename(p.path)].map((n) => String(n || '').trim().toLowerCase()).filter((n) => n.length > 1 && s.includes(n)).map((n) => n.length));
+  const best = Math.max(...projects.map(hit));
+  const named = best ? projects.filter((p) => hit(p) === best) : [];
+  if (named.length === 1) return named[0];
+  const pool = named.length ? named : projects;
+  const mine = topic?.projectId && pool.find((p) => p.id === topic.projectId);
+  if (mine) return mine;
+  const team = pool.filter((p) => p.analyst || p.lead?.decide);
+  if (team.length === 1) return team[0];
+  const among = team.length ? team : pool;
+  const last = (p) => (todos || []).reduce((m, t) => (t.projectId === p.id && (t.updatedAt || '') > m ? t.updatedAt : m), '');
+  return [...among].sort((a, b) => last(b).localeCompare(last(a)))[0];
+}
+
+/** Whether a todo is waiting for the person to say something (not for its lead). */
+const waitsForPerson = (t) => !t.leadPending && (t.phase === 'asking' || (!!t.leadAsk && ['confirm', 'review', 'failed'].includes(t.phase)));
 
 function extractJson(text) {
   const start = text.indexOf('{');
@@ -156,9 +184,15 @@ export class Chief {
     tp.updatedAt = now();
     topicId = tp.id;
     d.chief.push({ id: id('c'), role: 'user', text, at: now(), topicId });
+    // No project picked: work it out instead of asking or defaulting to the first one, and keep the conversation there.
+    const chosen = !this.store.project(projectId);
+    const project = this.store.project(projectId) || pickProject(d.projects, d.todos, text, tp);
+    projectId = project?.id || null;
+    if (projectId) tp.projectId = projectId;
     this.store.changed();
     const cn = zh(text);
     const say = (msg, extra = {}) => this.say(msg, { ...extra, topicId });
+    const where = chosen && project && d.projects.length > 1 ? (cn ? `（项目：${project.name}）` : ` (project: ${project.name})`) : '';
 
     if (/^(weekly )?retro(spective)?\b|^(周回顾|每周回顾|回顾|复盘)/i.test(text.trim())) return say(await this.#retro(cn));
     // "Run X every day" becomes a schedule (and a first run now).
@@ -202,6 +236,15 @@ export class Chief {
     if (/^(status|progress|what'?s going on|进度|状态)\??$/i.test(text.trim())) return say(this.#status(cn));
     if (/^(weekly )?retro(spective)?\b|^(周回顾|每周回顾|回顾|复盘)/i.test(text.trim())) return say(await this.#retro(cn));
 
+    // An answer to a question a todo is waiting on goes to that todo; it is not a new piece of work.
+    const answered = canApprove && this.#answer(text, topicId);
+    if (answered) {
+      const { todo, rest, others } = answered;
+      const more = others.length ? (cn ? ` ${others.map((x) => `#${x.number}`).join('、')} 也在等你回答，回复时带上编号。` : ` ${others.map((x) => `#${x.number}`).join(', ')} ${others.length > 1 ? 'are' : 'is'} waiting for an answer too: start your reply with the number.`) : '';
+      this.runner.reply(todo, todo.phase === 'asking' ? `Answer to your question “${todo.question?.text || ''}”: ${rest}` : rest);
+      return say(cn ? `已把你的回答交给 #${todo.number}，它接着做。${more}` : `Passed your answer to #${todo.number}; it carries on.${more}`, { todoIds: [todo.id] });
+    }
+
     this.busy = true;
     this.store.changed();
     try {
@@ -209,7 +252,7 @@ export class Chief {
       // A question or small talk gets an answer, not a todo.
       if (!plan.todos?.length) return say(plan.reply || this.#intro(cn));
       const created = plan.todos.map((p) => this.#create(p, projectId, topicId));
-      const list = created.map((t) => `#${t.number} ${t.title} → ${this.store.agent(t.agentId)?.name || '—'}`).join('\n');
+      const list = created.map((t) => `#${t.number} ${t.title} → ${this.store.agent(t.agentId)?.name || '—'}`).join('\n') + (where ? `\n${where.trim()}` : '');
       const reply =
         plan.reply ||
         (created.length > 1
@@ -226,6 +269,33 @@ export class Chief {
       this.busy = false;
       this.store.changed();
     }
+  }
+
+  /**
+   * The todo this message answers, if any: the one it names (#12 …), else the newest question asked in this
+   * conversation since the person last spoke. A long message, or one that says it is new, is a request of its own.
+   */
+  #answer(text, topicId) {
+    const d = this.store.data;
+    const waiting = d.todos.filter((t) => waitsForPerson(t) && !this.runner.busy(t));
+    if (!waiting.length) return null;
+    const m = text.trim().match(/^#(\d+)[\s:：,，]*([\s\S]+)$/);
+    if (m) {
+      const todo = waiting.find((t) => t.number === Number(m[1]));
+      return todo && m[2].trim() ? { todo, rest: m[2].trim(), others: [] } : null;
+    }
+    if (text.length > 400 || /^(new( request| task| idea)?|another thing|新需求|新任务|另外|还有一个)[\s:：,，]/i.test(text.trim())) return null;
+    // Questions asked in this conversation that the person has not said anything to since: the newest one is being answered.
+    const here = d.chief.filter((x) => x.topicId === topicId && !x.error);
+    const mine = here.filter((x) => x.role === 'user');
+    const before = mine.length > 1 ? mine[mine.length - 2].at : '';
+    const asked = (t) => here.filter((x) => x.role === 'chief' && x.todoIds?.includes(t.id)).map((x) => x.at).sort().pop() || '';
+    const open = waiting
+      .map((t) => ({ t, at: asked(t) }))
+      .filter((x) => x.at && x.at >= before)
+      .sort((x, y) => y.at.localeCompare(x.at));
+    if (!open.length) return null;
+    return { todo: open[0].t, rest: text.trim(), others: open.slice(1).map((x) => x.t) };
   }
 
   #create(p, projectId, topicId) {

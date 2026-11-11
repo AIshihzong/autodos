@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { startServer } from './index.js';
-import { splitRequest, labelsFor, analystPrompt } from './chief.js';
+import { splitRequest, labelsFor, analystPrompt, pickProject } from './chief.js';
 import { leadOptions, leadPrompt, parseLead, ownerHits } from './lead.js';
 import { parseConfig } from './autopilot.js';
 
@@ -630,6 +630,9 @@ test('Feishu: a request becomes a thread with a todo card, buttons decide, threa
   assert.equal(srv.store.data.feishu.chatId, '');
   fs_.channel = fake;
   fs_.status = 'on';
+  // A message from the group names no project: it goes to the one that has its own team.
+  const home = srv.store.data.projects[0];
+  home.analyst = true;
   await call('PATCH', '/settings', { planFirst: true, autoStart: true });
   const view = (await call('GET', '/state')).body.feishu;
   assert.equal(view.bound, true);
@@ -645,6 +648,8 @@ test('Feishu: a request becomes a thread with a todo card, buttons decide, threa
   const topic = srv.store.data.topics.find((x) => x.feishu?.rootId === 'om_req');
   assert.ok(topic, 'the request got its own topic');
   const todo = await waitFor(() => srv.store.data.todos.find((x) => x.topicId === topic.id && x.phase === 'confirm'));
+  assert.equal(todo.projectId, home.id);
+  home.analyst = false;
   const card = await waitFor(() => todo.feishu?.cardId && sent.find((x) => x.input?.card && x.opts?.replyTo === 'om_req'));
   assert.equal(card.opts.replyInThread, true);
   assert.equal(sent.filter((x) => x.input?.card).length, 1, 'one card per todo, then updated in place');
@@ -1055,4 +1060,99 @@ test('lead: a plan is confirmed by the lead, and switching the lead on takes ove
   await waitFor(async () => ['review', 'done'].includes(await phaseOf(n.number)), 30000);
   for (const t of [w, n]) await waitFor(async () => ['review', 'done'].includes(await phaseOf(t.number)), 30000);
   for (const t of [w, n]) if ((await phaseOf(t.number)) !== 'done') await call('POST', `/todos/${t.number}/action`, { action: 'close' });
+});
+
+test('chat: the project is worked out, not asked for or defaulted to the first one', () => {
+  const a = { id: 'a', name: 'Scratch', path: '/x/new' };
+  const b = { id: 'b', name: 'Canvas app', path: '/x/canvas-fork', analyst: true };
+  const c = { id: 'c', name: 'Docs site', path: '/x/docs' };
+  const todos = [{ projectId: 'a', updatedAt: '2026-01-03' }, { projectId: 'c', updatedAt: '2026-01-05' }];
+  assert.equal(pickProject([], todos, 'x', null), null);
+  assert.equal(pickProject([a], todos, 'x', null).id, 'a');
+  // Named in the message, by name or by folder.
+  assert.equal(pickProject([a, b, c], todos, 'In the docs site, fix the header', { projectId: 'b' }).id, 'c');
+  assert.equal(pickProject([a, b, c], todos, 'canvas-fork: the upload fails', null).id, 'b');
+  // Else where this conversation already is, else the only project with its own team, else the most recent work.
+  assert.equal(pickProject([a, b, c], todos, 'the upload fails after a pause', { projectId: 'c' }).id, 'c');
+  assert.equal(pickProject([a, b, c], todos, 'the upload fails after a pause', null).id, 'b');
+  assert.equal(pickProject([a, c], todos, 'the upload fails after a pause', null).id, 'c');
+});
+
+test('chat: a request without a project lands in the one it names, and an answer goes to the waiting todo instead of becoming a new one', async () => {
+  const first = srv.store.data.projects[0];
+  const repo = mkRepo('repo-pick-b');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  assert.notEqual(first.id, p.id);
+  const { body: tp } = await call('POST', '/topics', {});
+  const count = () => srv.store.data.todos.length;
+  const before = count();
+  await call('POST', '/chief', { text: 'In repo-pick-b: rework the footer [ask]', topicId: tp.id });
+  const t = await waitFor(() => srv.store.data.todos.find((x) => x.topicId === tp.id));
+  assert.equal(t.projectId, p.id, 'filed in the project the message names');
+  assert.equal(srv.store.data.topics.find((x) => x.id === tp.id).projectId, p.id, 'the conversation stays with that project');
+  assert.ok(srv.store.data.chief.some((m) => m.topicId === tp.id && m.role === 'chief' && /\(project: /.test(m.text)), 'and says where it went');
+  await waitFor(async () => (await phaseOf(t.number)) === 'asking', 30000);
+  await waitFor(() => srv.store.data.chief.some((m) => m.topicId === tp.id && /needs your decision/.test(m.text)));
+  assert.equal(count(), before + 1);
+  // The person simply replies in the conversation.
+  await call('POST', '/chief', { text: 'Keep the old layout', topicId: tp.id });
+  await waitFor(() => srv.store.data.chief.some((m) => m.topicId === tp.id && new RegExp(`Passed your answer to #${t.number}`).test(m.text)));
+  assert.equal(count(), before + 1, 'no new todo for the answer');
+  const got = await waitFor(async () => {
+    const x = await todoOf(t.number);
+    return x.messages.some((m) => m.role === 'user' && /Answer to your question “Keep the old layout or switch to the new one\?”: Keep the old layout/.test(m.text)) && x;
+  });
+  assert.ok(!got.messages.find((m) => /Answer to your question/.test(m.text)).lead);
+  await waitFor(async () => ['review', 'done'].includes(await phaseOf(t.number)), 30000);
+  // With nothing waiting, the same words are a request like any other.
+  await call('POST', '/chief', { text: 'Keep the old layout', topicId: tp.id });
+  await waitFor(() => count() === before + 2);
+  assert.equal(srv.store.data.todos[srv.store.data.todos.length - 1].projectId, p.id, 'still in the conversation\'s project');
+  for (const x of srv.store.data.todos.filter((y) => y.topicId === tp.id)) {
+    await waitFor(async () => ['review', 'done', 'asking', 'failed'].includes(await phaseOf(x.number)), 30000);
+    if ((await phaseOf(x.number)) !== 'done') await call('POST', `/todos/${x.number}/action`, { action: 'close' });
+  }
+});
+
+test('a todo filed in the wrong project starts over in the right one, and what it wrote stays where it was', async () => {
+  const wrong = mkRepo('repo-wrong');
+  const right = mkRepo('repo-right');
+  const { body: pw } = await call('POST', '/projects', { path: wrong });
+  const { body: pr } = await call('POST', '/projects', { path: right });
+  const t = await runTodo(pw.id, 'Misfiled work', { 'stray.txt': 'stray\n' });
+  const old = await waitFor(async () => {
+    const x = await todoOf(t.number);
+    return x.phase === 'review' && x;
+  }, 30000);
+  assert.ok(old.worktree.includes(pw.id) && old.branch);
+  const busy = await call('PATCH', `/todos/${t.number}`, { projectId: 'nope' });
+  assert.equal(busy.status, 400);
+  const moved = await call('PATCH', `/todos/${t.number}`, { projectId: pr.id });
+  assert.equal(moved.status, 200);
+  const now2 = await waitFor(async () => {
+    const x = await todoOf(t.number);
+    return x.projectId === pr.id && x.worktree && x.worktree !== old.worktree && x;
+  }, 30000);
+  assert.ok(now2.worktree.includes(pr.id), 'works in the right project now');
+  assert.ok(now2.messages.some((m) => m.role === 'system' && /Moved this from “repo-wrong” to “repo-right”/.test(m.text)));
+  assert.ok(!now2.review && !now2.plan, 'starts clean');
+  // The work it did in the wrong place was not thrown away.
+  assert.match(sh(wrong, 'branch', '--list', old.branch), new RegExp(old.branch.replace(/[/.]/g, '\\$&')));
+  await waitFor(async () => ['review', 'done'].includes(await phaseOf(t.number)), 30000);
+  if ((await phaseOf(t.number)) !== 'done') await call('POST', `/todos/${t.number}/action`, { action: 'close' });
+});
+
+test('lead: a todo that belongs to another project can be moved there, never to one that is not on the board', () => {
+  const t = { phase: 'asking', number: 1, title: 'x', question: { text: 'Which repository?' }, messages: [] };
+  const here = { id: 'a', name: 'Scratch', lead: { decide: true } };
+  const others = [{ id: 'b', name: 'Canvas app', path: '/x/canvas-fork' }];
+  const o = leadOptions(t, here, {}, others);
+  assert.deepEqual(o.allowed, ['answer', 'move', 'escalate']);
+  assert.deepEqual(leadOptions(t, here, {}, []).allowed, ['answer', 'escalate']);
+  assert.deepEqual(leadOptions({ ...t, phase: 'review', files: [] }, here, {}, others).allowed, ['approve', 'send_back', 'escalate']);
+  const prompt = leadPrompt(t, here, o, 0);
+  assert.match(prompt, /Other projects on this board:\n- Canvas app \(canvas-fork\)/);
+  assert.match(prompt, /"move"/);
+  assert.equal(parseLead('{"decision":"move","project":"Canvas app","why":"the code is there"}', o.allowed).project, 'Canvas app');
+  assert.equal(parseLead('{"decision":"move","why":"somewhere else"}', o.allowed), null);
 });

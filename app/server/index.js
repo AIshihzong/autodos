@@ -277,7 +277,15 @@ export function createApp({ dataDir } = {}) {
       const t = getTodo(rid);
       if (method === 'GET' && !sub) return t;
       if (method === 'PATCH' && !sub) {
-        for (const k of ['title', 'description', 'labels', 'agentId', 'projectId', 'mode', 'ref']) if (k in body) t[k] = body[k];
+        for (const k of ['title', 'description', 'labels', 'agentId', 'mode', 'ref']) if (k in body) t[k] = body[k];
+        if ('projectId' in body && (body.projectId || null) !== (t.projectId || null)) {
+          const to = body.projectId ? store.project(body.projectId) : null;
+          if (body.projectId && !to) throw new HttpError(400, 'Unknown project');
+          // Moving to another project starts the todo over there (its worktree and session belong to the old one).
+          if (to) await runner.transfer(t, to).catch((e) => { throw new HttpError(400, e.message); });
+          else if (runner.busy(t) || t.worktree) throw new HttpError(400, 'A todo that has started needs a project');
+          else t.projectId = null;
+        }
         t.updatedAt = now();
         store.changed();
         return t;
