@@ -35,7 +35,7 @@ export interface Project {
   id: string; name: string; path: string; git?: boolean; checks?: string[]; preview?: string; delivery?: 'merge' | 'pr'; memory?: { decisions: MemoryItem[]; declined: MemoryItem[] };
   baseBranch?: string; branchTemplate?: string; prTitle?: string; setup?: string; pushBase?: boolean; protectedPaths?: string[];
   autopilot?: { accept: boolean; review?: boolean; maxFiles?: number } | null; upstream?: Upstream | null;
-  lead?: { decide: boolean; ownerPaths?: string[]; maxRounds?: number } | null; analyst?: boolean; confirmRequirements?: boolean; knowledge?: string[]; leadLog?: { at: string; todo: number; title: string; gate: string; decision: string; why: string }[];
+  lead?: { decide: boolean; ownerPaths?: string[]; maxRounds?: number } | null; report?: { every?: number; branch?: string; file?: string; last?: string; lastError?: string | null } | null; proof?: { paths?: string[]; how?: string; required?: boolean } | null; analyst?: boolean; confirmRequirements?: boolean; knowledge?: string[]; leadLog?: { at: string; todo: number; title: string; gate: string; decision: string; why: string }[];
   backlog?: { file: string; every?: number; maxOpen?: number; left?: number; lastError?: string | null } | null; configAt?: string; configStale?: boolean; pullError?: string | null;
 }
 export interface Schedule { id: string; title: string; description: string; projectId?: string | null; agentId?: string | null; everyMinutes: number; enabled: boolean; mode: 'plan' | 'run'; nextAt?: string; lastAt?: string }

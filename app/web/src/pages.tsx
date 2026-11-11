@@ -159,6 +159,11 @@ function ChecksEditor({ project }: { project: Project }) {
     analyst: !!project.analyst,
     confirmRequirements: project.confirmRequirements !== false,
     knowledge: (project.knowledge || []).join('\n'),
+    reportOn: !!project.report,
+    reportBranch: project.report?.branch || '',
+    proofOn: !!project.proof,
+    proofPaths: (project.proof?.paths || []).join('\n'),
+    proofHow: project.proof?.how || '',
     backlogFile: project.backlog?.file || '',
     backlogOpen: project.backlog?.maxOpen || 1,
     upstreamUrl: project.upstream?.url || '',
@@ -186,6 +191,8 @@ function ChecksEditor({ project }: { project: Project }) {
     analyst: v.analyst,
     confirmRequirements: v.confirmRequirements,
     knowledge: lines(v.knowledge),
+    report: v.reportOn ? { ...(project.report || {}), every: project.report?.every || 120, branch: v.reportBranch.trim() } : null,
+    proof: v.proofOn ? { ...(project.proof || {}), paths: lines(v.proofPaths), how: v.proofHow.trim() } : null,
     backlog: v.backlogFile.trim() ? { ...(project.backlog || {}), file: v.backlogFile.trim(), maxOpen: v.backlogOpen } : null,
     upstream: v.upstreamUrl.trim() ? { ...(project.upstream || {}), url: v.upstreamUrl.trim(), branch: v.upstreamBranch.trim() || 'main', every: v.upstreamEvery } : null,
   });
@@ -259,6 +266,27 @@ function ChecksEditor({ project }: { project: Project }) {
           </label>
           <textarea className="checks-edit" rows={3} value={v.knowledge} placeholder={'docs/PROJECT_BRIEF.md\ndocs/requirements/'} onChange={(e) => setV({ ...v, knowledge: e.target.value })} aria-label={t.knowledge} />
         </div>
+        <Row label={t.proofOn} sub={t.proofHint}>
+          <Switch checked={v.proofOn} onChange={(x) => setV({ ...v, proofOn: x })} label={t.proofOn} />
+        </Row>
+        {v.proofOn && (
+          <div className="g-row stack">
+            <label className="g-label">
+              <span>{t.proofPaths}</span>
+              <small>{t.proofPathsHint}</small>
+            </label>
+            <textarea className="checks-edit" rows={2} value={v.proofPaths} placeholder={'web/src/*\napp/ui/*'} onChange={(e) => setV({ ...v, proofPaths: e.target.value })} aria-label={t.proofPaths} />
+            <textarea className="checks-edit" rows={3} value={v.proofHow} placeholder={t.proofHowHint} onChange={(e) => setV({ ...v, proofHow: e.target.value })} aria-label={t.proofHowHint} />
+          </div>
+        )}
+        <Row label={t.reportOn} sub={t.reportHint}>
+          <Switch checked={v.reportOn} onChange={(x) => setV({ ...v, reportOn: x })} label={t.reportOn} />
+        </Row>
+        {v.reportOn && (
+          <Row label={t.reportBranch} sub={project.report?.lastError || t.reportBranchHint}>
+            <input className="mono" value={v.reportBranch} placeholder="autodos/status" onChange={(e) => setV({ ...v, reportBranch: e.target.value })} aria-label={t.reportBranch} />
+          </Row>
+        )}
         {!!project.leadLog?.length && (
           <div className="g-row stack">
             <label className="g-label">

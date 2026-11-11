@@ -4,7 +4,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { id, now } from './store.js';
 import { runtimes, resolveRuntime, detectRuntimes } from './runtimes.js';
-import { prepareEvidence, collectEvidence } from './evidence.js';
+import { prepareEvidence, collectEvidence, proofNote } from './evidence.js';
 import { runCheck, runChecks, fixPrompt, reviewPrompt, parseReview, reviewFixPrompt, memoryBlock, changedFiles, autoFixable, protectedHits, REVIEW_LIMIT } from './quality.js';
 import { ensureWorktree, commitAll, landBranch, removeWorktree, diffStat, diffText, diffFiles, diffTruncated, baseOf, baseRef, branchName, isGitRepo, git } from './git.js';
 
@@ -92,6 +92,7 @@ export class Runner extends EventEmitter {
     t.error = null;
     t.leadRounds = 0;
     t.budgetExtensions = 0; // started by the person (or anew): the lead may again grant one extra budget
+    delete t.proofAsked;
     delete t.capacity;
     this.renewBudget(t);
     this.setPhase(t, 'queued');
@@ -184,7 +185,7 @@ export class Runner extends EventEmitter {
     }
     const started = t.phase !== 'todo';
     // Everything that described the work in the old project: the next turn starts clean in the new one.
-    for (const k of ['worktree', 'branch', 'base', 'setupDone', 'sessionId', 'sessionMachine', 'files', 'diff', 'diffStat', 'checks', 'checkLog', 'review', 'evidence', 'question', 'revision', 'stage', 'gateReason', 'leadPending', 'leadAsk', 'leadHold', 'autoAccepting', 'autoAccepted', 'remoteJob', 'mergeLanded', 'mergeQueuedAt', 'sessionCost', 'capacity', 'budgetExtensions']) delete t[k];
+    for (const k of ['worktree', 'branch', 'base', 'setupDone', 'sessionId', 'sessionMachine', 'files', 'diff', 'diffStat', 'checks', 'checkLog', 'review', 'evidence', 'question', 'revision', 'stage', 'gateReason', 'leadPending', 'leadAsk', 'leadHold', 'autoAccepting', 'autoAccepted', 'remoteJob', 'mergeLanded', 'mergeQueuedAt', 'sessionCost', 'capacity', 'budgetExtensions', 'proof', 'proofAsked']) delete t[k];
     t.movedAt = now(); // what was said before this was about another place
     t.plan = '';
     t.planApproved = false;
@@ -479,6 +480,10 @@ export class Runner extends EventEmitter {
               this.setPhase(t, 'review');
             },
           );
+        } else if (this.#askForProof(t, project)) {
+          // One more turn first: the change has to be shown running before anyone is asked to accept it.
+          t.revision = 'build';
+          this.setPhase(t, 'queued');
         } else {
           const stay = this.#autopilot(t, project);
           t.gateReason = stay || '';
@@ -520,6 +525,31 @@ export class Runner extends EventEmitter {
   }
 
   /**
+   * Proof of running (project.proof): a change to what users see or do comes with a screenshot or a recording
+   * of it happening, made by running it. Sets t.proof; true when the engineer is sent back once to produce it.
+   */
+  #askForProof(t, project) {
+    delete t.proof;
+    const p = project?.proof;
+    if (!p || !t.worktree || !Array.isArray(t.files) || !t.files.length) return false;
+    const paths = (p.paths || []).filter(Boolean);
+    if (paths.length && !protectedHits(t.files, paths).length) return false;
+    const shots = (t.evidence || []).filter((f) => ['image', 'video'].includes(f.kind));
+    const note = proofNote(path.join(this.store.dir, 'evidence', t.id));
+    t.proof = { applies: true, shown: shots.length > 0, files: shots.map((f) => f.name).slice(0, 12), note };
+    if (t.proof.shown || t.proofAsked) return false;
+    t.proofAsked = true;
+    const how = String(p.how || '').trim() || 'Run the app, or the flow you changed, the way a user would.';
+    this.addMessage(
+      t,
+      'user',
+      `Before this is reviewed, show it working. ${how}\nFor each thing the customer was promised to see (the acceptance checks in the task; without any, the visible effect of your change), capture a screenshot or a short screen recording while it happens and save it under .autodos/evidence/ (png, jpg, webm or mp4, under 5 MB each). Write .autodos/evidence/proof.md with one line per check: "shown", "failed" or "cannot be shown here", the file that shows it, and one sentence. Where you can, make it a test that can be run again, and say how. Do not stage it: if it cannot be run here, say exactly what is missing. If what you see is wrong, fix the code first.`,
+      { pending: true, lead: true, kind: 'proof' },
+    );
+    return true;
+  }
+
+  /**
    * Unattended projects (project.autopilot.accept): '' when a finished change may land without the person,
    * a reason when it has to wait for them, null when the project is not unattended.
    */
@@ -541,6 +571,7 @@ export class Runner extends EventEmitter {
       if (open) return `the review has ${open} open finding${open > 1 ? 's' : ''}`;
       if (t.review.partial) return 'the change is too large for the reviewer to have read all of it';
     }
+    if (t.proof?.applies && !t.proof.shown && project.proof?.required !== false) return 'it changes what users see or do, and nothing shows it running';
     const max = Number(ap.maxFiles) || 0;
     if (max && files.length > max) return `it changes ${files.length} files (the limit for unattended changes is ${max})`;
     // Files only the person may approve (lead.ownerPaths) are protected too, lead or no lead.

@@ -46,11 +46,22 @@ export function collectEvidence(cwd, keepDir) {
 export function kindOf(name) {
   const ext = path.extname(name).toLowerCase();
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) return 'image';
+  if (['.webm', '.mp4', '.mov'].includes(ext)) return 'video';
   if (['.txt', '.log', '.json', '.md', '.csv', '.xml', '.html', '.yaml', '.yml', '.out'].includes(ext)) return 'text';
   return 'file';
 }
 
-const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.webm': 'video/webm', '.mp4': 'video/mp4', '.mov': 'video/quicktime' };
+
+/** What the engineer wrote about the proof (proof.md in the evidence), for the lead and the customer. */
+export function proofNote(keepDir) {
+  for (const name of ['proof.md', 'proof.txt', 'PROOF.md']) {
+    try {
+      return fs.readFileSync(path.join(keepDir, name), 'utf8').slice(0, 4000).trim();
+    } catch {}
+  }
+  return '';
+}
 
 /** Serve one kept file. Anything not an image is plain text, and nothing can run (sandbox CSP). */
 export function serveEvidence(res, keepDir, name) {
@@ -66,7 +77,7 @@ export function serveEvidence(res, keepDir, name) {
   }
   res.writeHead(200, {
     'Content-Type': MIME[path.extname(file).toLowerCase()] || 'text/plain; charset=utf-8',
-    'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self'",
+    'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self'; media-src 'self'",
     'X-Content-Type-Options': 'nosniff',
     'Cache-Control': 'no-store',
   });

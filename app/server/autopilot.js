@@ -94,6 +94,12 @@ export function parseConfig(text) {
       case 'confirmRequirements':
         out.confirmRequirements = v !== false;
         break;
+      case 'proof':
+        out.proof = v ? { paths: list(v.paths, 100), how: str(v.how, 3000), required: v.required !== false } : null;
+        break;
+      case 'report':
+        out.report = v ? { every: num(v.every, 15, 10080, 120), branch: str(v.branch, 120), file: okFile(str(v.file, 200)) ? str(v.file, 200) : 'STATUS.md', quietHours: num(v.quietHours, 1, 720, 6) } : null;
+        break;
       case 'knowledge': {
         const files = list(v, 40);
         const bad = files.filter((f) => !okFile(f.replace(/\/$/, '')));
@@ -403,7 +409,8 @@ export class Autopilot {
     const { text, sha, from } = await this.#configText(project);
     const { config: c, warnings } = parseConfig(text);
     const d = this.store.data;
-    for (const k of ['baseBranch', 'branchTemplate', 'prTitle', 'setup', 'preview', 'checks', 'protectedPaths', 'delivery', 'pushBase', 'autopilot', 'lead', 'analyst', 'confirmRequirements', 'knowledge']) if (k in c) project[k] = c[k];
+    for (const k of ['baseBranch', 'branchTemplate', 'prTitle', 'setup', 'preview', 'checks', 'protectedPaths', 'delivery', 'pushBase', 'autopilot', 'lead', 'analyst', 'confirmRequirements', 'knowledge', 'proof']) if (k in c) project[k] = c[k];
+    if ('report' in c) project.report = c.report ? { ...(project.report || {}), ...c.report } : null;
     if ('upstream' in c) project.upstream = c.upstream ? { ...(project.upstream?.url === c.upstream.url ? project.upstream : {}), ...c.upstream } : null;
     if ('backlog' in c) project.backlog = c.backlog ? { ...(project.backlog || {}), ...c.backlog } : null;
     if (c.memory) {

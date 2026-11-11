@@ -26,6 +26,38 @@ export async function isGitRepo(dir) {
 export const WHO = ['-c', 'user.name=Autodos', '-c', 'user.email=autodos@localhost'];
 const sha = (repo, ref) => git(repo, ['rev-parse', '-q', '--verify', ref]).catch(() => '');
 
+/**
+ * Put one file on a branch of its own (a tree holding only that file), on top of what the branch has, without
+ * touching any checkout. Used for the team report. Never forces: a push that is refused is an error.
+ */
+export async function commitFileToBranch(repo, branch, file, text, message, { remote = 'origin', push = false } = {}) {
+  if (!(await validBranch(repo, branch))) throw new Error(`"${branch}" is not a usable branch name`);
+  if (!file || path.isAbsolute(file) || file.split(/[\\/]/).includes('..')) throw new Error('The report file must be a path inside the repository');
+  const dir = await git(repo, ['rev-parse', '--absolute-git-dir']);
+  const tmp = path.join(dir, `autodos-report-${process.pid}-${Date.now()}`);
+  const index = `${tmp}.index`;
+  const withIndex = (args) =>
+    new Promise((resolve, reject) => {
+      execFile('git', args, { cwd: repo, env: { ...childEnv(), GIT_INDEX_FILE: index }, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => (err ? reject(new Error((stderr || err.message).trim())) : resolve(stdout.trim())));
+    });
+  try {
+    fs.writeFileSync(tmp, text);
+    const blob = await git(repo, ['hash-object', '-w', tmp]);
+    await withIndex(['read-tree', '--empty']);
+    await withIndex(['update-index', '--add', '--cacheinfo', `100644,${blob},${file}`]);
+    const tree = await withIndex(['write-tree']);
+    if (push) await git(repo, ['fetch', '--quiet', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]).catch(() => {});
+    const parent = (push && (await sha(repo, `refs/remotes/${remote}/${branch}`))) || (await sha(repo, `refs/heads/${branch}`));
+    if (parent && (await git(repo, ['rev-parse', `${parent}^{tree}`])) === tree) return { sha: parent, changed: false };
+    const commit = await git(repo, [...WHO, 'commit-tree', tree, ...(parent ? ['-p', parent] : []), '-m', message]);
+    await git(repo, ['update-ref', `refs/heads/${branch}`, commit]);
+    if (push) await git(repo, ['push', '--quiet', remote, `refs/heads/${branch}:refs/heads/${branch}`]);
+    return { sha: commit, changed: true };
+  } finally {
+    for (const f of [tmp, index]) fs.rmSync(f, { force: true });
+  }
+}
+
 /** A name git accepts for a branch, and that is safe to pass on a command line. */
 export async function validBranch(repo, name) {
   if (!name || /^-|\s/.test(name)) return false;

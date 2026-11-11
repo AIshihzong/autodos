@@ -11,6 +11,7 @@ import { isConfirm, isDrop, requirementText } from './requirements.js';
 import { leadOptions, leadPrompt, parseLead, ownerHits } from './lead.js';
 import { parseConfig } from './autopilot.js';
 import { runtimes } from './runtimes.js';
+import { buildReport } from './watch.js';
 
 process.env.AUTODOS_ALLOW_LOCAL_CHANNELS = '1';
 let srv;
@@ -1342,4 +1343,89 @@ test('requirements: nothing is built before the customer confirms the card; smal
     srv.chief.analyze = null;
     project.analyst = false;
   }
+});
+
+test('lead: out of rounds it hands over properly instead of going silent', () => {
+  const here = { id: 'a', name: 'P', lead: { decide: true, maxRounds: 3 } };
+  const t = { phase: 'review', number: 7, title: 'Stubborn', files: ['a.txt'], leadRounds: 3, messages: [] };
+  const o = leadOptions(t, here, {}, [{ id: 'b', name: 'Other' }]);
+  assert.deepEqual(o.allowed, ['escalate']);
+  assert.ok(o.final);
+  assert.match(leadPrompt(t, here, o, 3), /Hand it to the customer properly/);
+  assert.deepEqual(leadOptions({ ...t, leadRounds: 2 }, here, {}, []).allowed, ['approve', 'send_back', 'escalate']);
+});
+
+test('proof: a change users see is shown running before anyone accepts it', async () => {
+  const repo = mkRepo('repo-proof');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  await call('PATCH', `/projects/${p.id}`, { lead: { decide: true }, proof: { paths: ['ui/*'], how: 'Open ui/page.html in a browser.' } });
+  // Not a change users see: no proof is asked for, the lead accepts it.
+  const plain = await runTodo(p.id, 'Proof plain', { 'lib/x.txt': 'x\n' });
+  await waitFor(async () => (await phaseOf(plain.number)) === 'done', 30000);
+  assert.ok(!(await todoOf(plain.number)).messages.some((m) => m.kind === 'proof'));
+  // A change users see: the engineer is sent back once to show it; with nothing to show, the lead cannot accept it.
+  const ui = await runTodo(p.id, 'Proof ui', { 'ui/page.html': '<p>hi</p>\n' });
+  const held = await waitFor(async () => {
+    const x = await todoOf(ui.number);
+    return x.phase === 'review' && x.leadHold && x;
+  }, 40000);
+  const asked = held.messages.filter((m) => m.kind === 'proof');
+  assert.equal(asked.length, 1);
+  assert.ok(asked[0].lead && /show it working\. Open ui\/page\.html in a browser\./.test(asked[0].text));
+  assert.deepEqual([held.proof.applies, held.proof.shown], [true, false]);
+  assert.ok(held.leadAsk.blocks.some((b) => /nothing shows it running/.test(b)));
+  assert.ok(!fs.existsSync(path.join(repo, 'ui')));
+  // The recording is there: now it can be accepted, and the person can open it.
+  fs.mkdirSync(path.join(held.worktree, '.autodos/evidence'), { recursive: true });
+  fs.writeFileSync(path.join(held.worktree, '.autodos/evidence/footer.webm'), 'not really a video');
+  fs.writeFileSync(path.join(held.worktree, '.autodos/evidence/proof.md'), '1. footer shows: shown (footer.webm)\n');
+  await call('POST', `/todos/${ui.number}/messages`, { text: 'recorded it by hand' });
+  await waitFor(async () => (await phaseOf(ui.number)) === 'done', 40000);
+  const done = await todoOf(ui.number);
+  assert.deepEqual([done.proof.shown, done.proof.files], [true, ['footer.webm']]);
+  assert.match(done.proof.note, /footer shows: shown/);
+  const res = await fetch(`${base}/api/todos/${ui.number}/evidence/footer.webm`);
+  assert.equal(res.headers.get('content-type'), 'video/webm');
+  assert.ok(fs.existsSync(path.join(repo, 'ui/page.html')));
+});
+
+test('team report: what landed, what is stuck and why, what waits for the person; also on a branch of its own', async () => {
+  const project = { id: 'p1', name: 'Shop', leadLog: [{ at: '2026-01-02T00:00:00Z', todo: 3, decision: 'send_back', why: 'The total is wrong for empty carts.' }] };
+  const at = Date.parse('2026-01-02T12:00:00Z');
+  const mk = (n, phase, extra = {}) => ({ id: `t${n}`, number: n, title: `Task ${n}`, projectId: 'p1', phase, updatedAt: '2026-01-02T01:00:00Z', ...extra });
+  const data = {
+    todos: [mk(1, 'done'), mk(2, 'building', { stage: 'verifying' }), mk(3, 'building', { leadRounds: 4 }), mk(4, 'review', { leadHold: true, leadAsk: { text: 'Ship without the export?', recommend: 'Yes, export can follow.' } }), mk(5, 'queued', { capacity: { tries: 2, until: '2026-01-02T12:30:00Z' } }), mk(6, 'review', { leadPending: { at: 'x' } }), { ...mk(9, 'done'), projectId: 'other' }],
+    runs: [{ todoId: 't2', startedAt: '2026-01-02T00:30:00Z', costUsd: 1.5 }],
+    requirements: [{ projectId: 'p1', status: 'confirm', number: 2, title: 'Gift cards' }],
+  };
+  const r = buildReport(project, data, { since: '2026-01-01T00:00:00Z', at, quietHours: 6 });
+  assert.deepEqual(r.counts, { landed: 1, moving: 2, withLead: 1, yours: 2, stuck: 1, capacity: 1, quiet: 11 });
+  for (const want of [/Nothing has landed for 11 hours/, /## Waiting for you \(1\)\n- #4 Task 4: Ship without the export\? The lead suggests: Yes, export can follow\./, /## Requirement cards for you to confirm \(1\)\n- R2 Gift cards/, /## Landed \(1\)\n- #1 Task 1/, /#3 Task 3: 4 rounds so far\. The total is wrong for empty carts\./, /#2 Task 2 · verifying/, /#5 Task 5 · continues at 12:30 UTC/, /Decided by the lead: send_back 1/, /\$1\.50/]) assert.match(r.text, want);
+  assert.ok(!/Task 9/.test(r.text));
+  assert.equal(buildReport(project, data, { since: '2026-01-01T00:00:00Z', at: at + 60000 }).key, r.key, 'the same state is the same report');
+  data.todos[1].phase = 'review';
+  assert.notEqual(buildReport(project, data, { since: '2026-01-01T00:00:00Z', at }).key, r.key);
+
+  // For real: written to its own branch, which holds nothing but the report; the base branch is untouched.
+  const repo = mkRepo('repo-report');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  await call('PATCH', `/projects/${p.id}`, { report: { every: 120, branch: 'autodos/status' } });
+  const head = sh(repo, 'rev-parse', 'HEAD');
+  const t = await runTodo(p.id, 'Reported work', { 'r.txt': 'r\n' });
+  await waitFor(async () => (await phaseOf(t.number)) === 'review', 30000);
+  const made = (await call('POST', `/projects/${p.id}/report`, {})).body;
+  assert.match(made.text, /## Waiting for you \(1\)\n- #\d+ Reported work/);
+  assert.equal(made.error, null);
+  assert.equal(sh(repo, 'show', 'autodos/status:STATUS.md').trim(), made.text.trim());
+  assert.equal(sh(repo, 'ls-tree', '-r', '--name-only', 'autodos/status'), 'STATUS.md');
+  assert.equal(sh(repo, 'rev-parse', 'HEAD'), head);
+  assert.ok(srv.store.data.chief.some((m) => m.kind === 'report' && /Reported work/.test(m.text)));
+  await call('POST', `/todos/${t.number}/action`, { action: 'done' });
+  await waitFor(async () => (await phaseOf(t.number)) === 'done', 30000);
+  await call('POST', `/projects/${p.id}/report`, {});
+  assert.match(sh(repo, 'show', 'autodos/status:STATUS.md'), /## Landed \(1\)\n- #\d+ Reported work/);
+  assert.equal(sh(repo, 'rev-list', '--count', 'autodos/status'), '2');
+  // The base branch is refused as a place for it.
+  await call('PATCH', `/projects/${p.id}`, { report: { branch: 'main' } });
+  assert.match((await call('POST', `/projects/${p.id}/report`, {})).body.error, /needs a branch of its own/);
 });

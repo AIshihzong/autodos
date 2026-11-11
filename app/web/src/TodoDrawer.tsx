@@ -123,6 +123,11 @@ function Evidence({ todo }: { todo: Todo }) {
             <img src={url(f.name)} alt={f.name} loading="lazy" />
             <span className="tiny muted ellipsis">{f.name}</span>
           </a>
+        ) : f.kind === 'video' ? (
+          <span key={f.name} className="ev-image">
+            <video src={url(f.name)} controls preload="metadata" style={{ maxWidth: '100%' }} />
+            <span className="tiny muted ellipsis">{f.name}</span>
+          </span>
         ) : (
           <a key={f.name} className="ev-file" href={url(f.name)} target="_blank" rel="noreferrer">
             <Icon name="file" size={14} />

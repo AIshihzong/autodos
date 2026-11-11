@@ -27,6 +27,8 @@ export function knowledgeBlock(project) {
 /** What the lead may do at a gate, given what the code can see for itself. */
 export function leadOptions(t, project, settings = {}, others = []) {
   const gate = t.phase;
+  // Out of rounds: the lead's last act on this todo is a proper hand-over to the customer, not silence.
+  if ((t.leadRounds || 0) >= (Number(project?.lead?.maxRounds) || MAX_ROUNDS)) return { allowed: ['escalate'], blocks: [], others: [], final: true };
   // Before any work is accepted, a todo that plainly belongs elsewhere can be moved there (it starts over).
   const move = others.length ? ['move'] : [];
   if (gate === 'asking') return { allowed: ['answer', ...move, 'escalate'], blocks: [], others };
@@ -45,12 +47,13 @@ export function leadOptions(t, project, settings = {}, others = []) {
   if (t.worktree && !Array.isArray(t.files)) blocks.push('its change set could not be read');
   if (t.review?.findings?.some((f) => f.severity === 'high')) blocks.push('the review has an open high-severity finding');
   if (t.review?.partial) blocks.push('the change is too large for the reviewer to have read all of it');
+  if (t.proof?.applies && !t.proof.shown && project?.proof?.required !== false) blocks.push('it changes what users see or do, and nothing shows it running (no screenshot or recording in the evidence)');
   return { allowed: blocks.length ? ['send_back', 'escalate'] : ['approve', 'send_back', 'escalate'], blocks, owner };
 }
 
 const clip = (s, n) => (String(s || '').length > n ? String(s).slice(0, n) + '\n…(cut)' : String(s || ''));
 
-export function leadPrompt(t, project, { allowed, blocks = [], owner = [], others = [], spent = false }, rounds = 0) {
+export function leadPrompt(t, project, { allowed, blocks = [], owner = [], others = [], spent = false, final = false }, rounds = 0) {
   const gate = t.phase;
   // After a move to this project, what the engineer said before was about another place.
   const last = [...(t.messages || [])].reverse().find((m) => m.role === 'agent' && !(t.movedAt && m.at < t.movedAt));
@@ -93,7 +96,9 @@ Between two reasonable technical options, pick one and say why. Follow the proje
   }
   if (gate === 'failed' && /^Budget reached/.test(t.error || '')) parts.push(spent ? 'This task already got one extra budget from you and ran out again. More spending is the customer\'s call: pass it on, with what has been done so far and what is left.' : 'It stopped at the spending limit. You may grant one more budget ("retry") when the work is clearly on track and close to done; otherwise pass it on.');
   if (blocks.length) parts.push(`You cannot accept it as it stands, because ${blocks.join('; ')}. Send it back with what to fix, or pass it on.`);
-  if (rounds) parts.push(`You have already sent this task back or answered it ${rounds} time${rounds > 1 ? 's' : ''}. If it keeps coming back with the same problem, change your instructions or pass it on.`);
+  if (final) parts.push(`You have sent this task back or answered it ${rounds} times and it is still not done. Stop steering it. Hand it to the customer properly: in "why" say in one or two plain sentences what works, what does not, and what you tried; in "ask" put the single decision you need from them (for example: accept it as it is, narrow what was asked, or drop it); give 2-4 "options" and your "recommend".`);
+  else if (rounds) parts.push(`You have already sent this task back or answered it ${rounds} time${rounds > 1 ? 's' : ''}. If it keeps coming back with the same problem, change your instructions or pass it on.`);
+  if (t.proof?.applies) parts.push(t.proof.shown ? `Proof that it runs (files the customer can open): ${(t.proof.files || []).join(', ')}${t.proof.note ? `\n${clip(t.proof.note, 1500)}` : ''}` : `Nothing shows this change running: the evidence holds no screenshot or recording.${t.proof.note ? ` The engineer says: ${clip(t.proof.note, 800)}` : ''}`);
   const verbs = {
     answer: '"answer": answer the question yourself; "text" is your answer to the engineer',
     approve: gate === 'confirm' ? '"approve": the plan is good, go ahead' : '"approve": the change is good, merge it',
@@ -163,6 +168,8 @@ export class Lead {
     this.deciding = new Map(); // todoId -> token
     runner.lead = this;
     runner.on('phase', (t) => t.leadPending && this.#decide(t).catch(() => {}));
+    this.timer = setInterval(() => this.patrol(), 5 * 60_000);
+    this.timer.unref?.();
     // Gates the lead was standing at when the app quit.
     setImmediate(() => {
       for (const t of store.data.todos) if (t.leadPending) this.#decide(t).catch(() => {});
@@ -174,7 +181,12 @@ export class Lead {
     const project = this.store.project(t.projectId);
     if (!project?.lead?.decide || !LEAD_GATES.includes(phase)) return false;
     if (t.leadHold || t.autoAccepting) return false; // already passed on to the person, or landing by itself
-    return (t.leadRounds || 0) < (Number(project.lead.maxRounds) || MAX_ROUNDS);
+    return true; // out of rounds it still looks once more, to hand over properly (leadOptions: final)
+  }
+
+  /** Every few minutes: anything of a lead's project that waits at a gate without a decision gets one. */
+  patrol() {
+    for (const p of this.store.data.projects) if (p.lead?.decide) this.sweep(p);
   }
 
   /** Stand at every gate of a project that is waiting for the person right now (after the lead is switched on). */
@@ -183,7 +195,7 @@ export class Lead {
     for (const t of this.store.data.todos) {
       if (t.projectId !== project.id || t.leadPending || this.runner.busy(t)) continue;
       // Passed on only because the lead could not look at all: that was never a decision, so it looks now.
-      if (t.leadHold && t.leadAsk?.failed && project.lead?.decide) this.#release(t);
+      if (t.leadHold && (t.leadAsk?.failed || /^The lead could not look at this/.test(t.leadAsk?.why || '')) && project.lead?.decide) this.#release(t);
       if (!this.takes(t, t.phase)) continue;
       t.leadPending = { gate: t.phase, at: now() };
       taken.push(t.number);
@@ -216,7 +228,10 @@ export class Lead {
   async think(t, project, options, rounds) {
     const d = this.store.data;
     const runtimeId = resolveRuntime(d.settings.chiefRuntime);
-    if (runtimeId === 'demo') return demoLead(t, options, rounds);
+    if (runtimeId === 'demo') {
+      const out = demoLead(t, options, rounds);
+      return options.allowed.includes(out.decision) ? out : { decision: 'escalate', why: `Tried ${rounds} times; it is still not done.`, ask: `#${t.number} ${t.title}: keep going, narrow it, or drop it?`, options: ['Keep going', 'Narrow it', 'Drop it'], recommend: '' };
+    }
     const res = await runtimes[runtimeId].run({ prompt: leadPrompt(t, project, options, rounds), kind: 'chief', cwd: t.worktree || project?.path || this.store.dir, settings: d.settings });
     return parseLead(res.text, options.allowed) || { decision: 'escalate', why: 'The lead could not reach a decision.', ask: '', options: [], recommend: '' };
   }
