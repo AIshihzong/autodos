@@ -99,7 +99,9 @@ function spawnLines(bin, args, { cwd, signal, onLine, onStderr, env }) {
       signal?.removeEventListener('abort', abort);
       if (buf.trim()) onLine(buf);
       if (signal?.aborted) return reject(new Error('Stopped'));
-      if (code !== 0) return reject(new Error(err.trim().split('\n').slice(-5).join('\n') || `exited with code ${code}`));
+      // CLI notices (e.g. "[claude-code:unrecognized_model] …" for a model name it has no metadata for) are not the error.
+      const why = err.split('\n').filter((l) => l.trim() && !/^\[claude-code:[a-z_]+\]/.test(l.trim())).slice(-5).join('\n');
+      if (code !== 0) return reject(Object.assign(new Error(why || `exited with code ${code}`), { exitCode: code }));
       resolve();
     });
   });
@@ -143,6 +145,11 @@ const claude = {
           result = ev;
         }
       },
+    }).catch((e) => {
+      // The run's own result says what went wrong (usage limit, auth, …); a finished, successful result stands.
+      if (result?.is_error && result.result) throw new Error(result.result);
+      if (result && !result.is_error && e.message !== 'Stopped') return;
+      throw e;
     });
     if (result?.is_error) throw new Error(result.result || 'Claude Code reported an error');
     return {
