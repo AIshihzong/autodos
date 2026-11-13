@@ -1403,9 +1403,18 @@ test('lead: out of rounds it hands over properly instead of going silent', () =>
   const here = { id: 'a', name: 'P', lead: { decide: true, maxRounds: 3 } };
   const t = { phase: 'review', number: 7, title: 'Stubborn', files: ['a.txt'], leadRounds: 3, messages: [] };
   const o = leadOptions(t, here, {}, [{ id: 'b', name: 'Other' }]);
-  assert.deepEqual(o.allowed, ['escalate']);
+  // At review, with nothing in the facts against landing, it may still land it and keep what is left as a follow-up.
+  assert.deepEqual(o.allowed, ['approve', 'escalate']);
   assert.ok(o.final);
-  assert.match(leadPrompt(t, here, o, 3), /Hand it to the customer properly/);
+  const prompt = leadPrompt(t, here, o, 3);
+  assert.match(prompt, /Hand it to the customer properly/);
+  assert.match(prompt, /The customer is not asked about technical leftovers/);
+  // Facts against landing (a high-severity finding), or another gate: only a hand-over.
+  const risky = leadOptions({ ...t, review: { findings: [{ severity: 'high' }] } }, here, {}, []);
+  assert.deepEqual(risky.allowed, ['escalate']);
+  assert.match(risky.blocks.join(), /high-severity/);
+  assert.doesNotMatch(leadPrompt({ ...t }, here, risky, 3), /technical leftovers/);
+  assert.deepEqual(leadOptions({ ...t, phase: 'asking' }, here, {}, []).allowed, ['escalate']);
   assert.deepEqual(leadOptions({ ...t, leadRounds: 2 }, here, {}, []).allowed, ['approve', 'send_back', 'escalate']);
 });
 

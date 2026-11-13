@@ -28,8 +28,13 @@ export function knowledgeBlock(project) {
 /** What the lead may do at a gate, given what the code can see for itself. */
 export function leadOptions(t, project, settings = {}, others = []) {
   const gate = t.phase;
-  // Out of rounds: the lead's last act on this todo is a proper hand-over to the customer, not silence.
-  if ((t.leadRounds || 0) >= (Number(project?.lead?.maxRounds) || MAX_ROUNDS)) return { allowed: ['escalate'], blocks: [], others: [], final: true };
+  // Out of rounds: no more steering. The lead's last act is a proper hand-over to the customer, or, at review when
+  // the facts allow landing and what is left is only technical, landing it with the rest as a follow-up.
+  if ((t.leadRounds || 0) >= (Number(project?.lead?.maxRounds) || MAX_ROUNDS)) {
+    const facts = gate === 'review' ? leadOptions({ ...t, leadRounds: 0 }, project, settings, []) : null;
+    const land = facts && !facts.blocks.length;
+    return { allowed: land ? ['approve', 'escalate'] : ['escalate'], blocks: facts?.blocks || [], owner: facts?.owner || [], others: [], final: true };
+  }
   // Before any work is accepted, a todo that plainly belongs elsewhere can be moved there (it starts over).
   const move = others.length ? ['move'] : [];
   if (gate === 'asking') return { allowed: ['answer', ...move, 'escalate'], blocks: [], others };
@@ -97,6 +102,7 @@ Between two reasonable technical options, pick one and say why. Follow the proje
   }
   if (gate === 'failed' && /^Budget reached/.test(t.error || '')) parts.push(spent ? 'This task already got one extra budget from you and ran out again. More spending is the customer\'s call: pass it on, with what has been done so far and what is left.' : 'It stopped at the spending limit. You may grant one more budget ("retry") when the work is clearly on track and close to done; otherwise pass it on.');
   if (blocks.length) parts.push(`You cannot accept it as it stands, because ${blocks.join('; ')}. Send it back with what to fix, or pass it on.`);
+  if (final && allowed.includes('approve')) parts.push(`You have sent this task back or answered it ${rounds} times. Stop steering it. If the change is safe to land as it is and what is left is only technical (tooling, tests, robustness, an edge case nobody asked about, something the team can do as its own follow-up), approve it: in "text" list what is left so it is written down as a follow-up, and say so in "why". The customer is not asked about technical leftovers. Only when what is left is theirs (see above: what users see or get, money, dropping part of what they asked for) hand it over instead, as follows.`);
   if (final) parts.push(`You have sent this task back or answered it ${rounds} times and it is still not done. Stop steering it. Hand it to the customer properly: in "why" say in one or two plain sentences what works, what does not, and what you tried; in "ask" put the single decision you need from them (for example: accept it as it is, narrow what was asked, or drop it); give 2-4 "options" and your "recommend".`);
   else if (rounds) parts.push(`You have already sent this task back or answered it ${rounds} time${rounds > 1 ? 's' : ''}. If it keeps coming back with the same problem, change your instructions or pass it on.`);
   if (t.proof?.applies) parts.push(t.proof.shown ? `Proof that it runs (files the customer can open): ${(t.proof.files || []).join(', ')}${t.proof.note ? `\n${clip(t.proof.note, 1500)}` : ''}` : `Nothing shows this change running: the evidence holds no screenshot or recording.${t.proof.note ? ` The engineer says: ${clip(t.proof.note, 800)}` : ''}`);
