@@ -280,7 +280,7 @@ window.__ModuleLoader__.load({
         h('div', { style: { fontWeight: 500, marginBottom: 6 } }, d.kind === 'permission' ? `${t('w_permission')}${d.tool ? ` · ${d.tool}` : ''}` : d.kind === 'result' ? t('w_result') : d.question),
         d.kind ? h('div', { style: { whiteSpace: 'pre-wrap', marginBottom: 6 } }, d.question) : null,
         d.reversible === false ? h('div', { style: { ...css.muted, fontSize: 12, marginBottom: 6 } }, t('irreversible')) : null,
-        d.kind === 'result' || d.kind === 'permission' ? h('textarea', { style: { ...css.input, minHeight: 50, marginBottom: 6 }, placeholder: t('note_ph'), value: note, onChange: (e) => setNote(e.target.value) }) : null,
+        d.kind === 'result' ? h('textarea', { style: { ...css.input, minHeight: 50, marginBottom: 6 }, placeholder: t('note_ph'), value: note, onChange: (e) => setNote(e.target.value) }) : null,
         h('div', { style: { display: 'flex', gap: 8 } },
           options.map((o, i) => h('button', { key: o, style: i === 0 ? css.primary : css.btn, disabled: busy, onClick: () => run({ action: 'decide', decision: d.id, choice: o, note: note.trim() || undefined }) }, t(`o_${o}`) || o))),
         error ? h('div', { style: css.err }, error) : null);

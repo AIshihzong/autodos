@@ -63,7 +63,7 @@ test('a task goes from chat to an agent, through a permission, to an accepted re
   const ag = paseo.agents.get(agentId);
   ag.activity = 'Reading the layout\nEditing footer.tsx';
   await a.sync();
-  ag.activity = 'Editing footer.tsx\nRunning npm test';
+  ag.activity = 'Task #1: Add a footer\nPut the year in it.\nEditing footer.tsx\nRunning npm test';
   ag.pendingPermissions = [{ id: 'perm-1', tool: 'Bash', description: 'Run npm test' }];
   await a.sync();
   let row = board(l).rows[0];
@@ -74,6 +74,7 @@ test('a task goes from chat to an agent, through a permission, to an accepted re
   await a.sync(); // still pending: no second decision
   const perms = a.openDecisions(t.id, 'permission');
   assert.equal(perms.length, 1);
+  assert.equal(l.get('thread', t.threadId).status, 'permission');
 
   await a.decide(perms[0].id, 'Allow');
   assert.deepEqual(paseo.calls.at(-1), ['permit', { agentId, requestId: 'perm-1', allow: true }]);
@@ -192,6 +193,18 @@ test('the Paseo wrapper builds the right commands and reads errors', async () =>
   await assert.rejects(p.send({ agentId: 'a9', text: 'hi' }), /NOT_FOUND: no agent a9/);
   await p.permit({ agentId: 'a1', requestId: 'p1', allow: false });
   assert.deepEqual(seen.at(-1).slice(1, 5), ['permit', 'deny', 'a1', 'p1']);
+});
+
+test('the prompt is not echoed into the timeline, and a permission says what it is for', async () => {
+  const { l, paseo, a } = setup();
+  const t = await a.createTask({ title: 'Add hello', description: 'Write hello.sh', project: 'Demo' });
+  const ag = paseo.agents.get(l.get('thread', t.threadId).agentId);
+  ag.activity = '[User] Task #1: Add hello\nWrite hello.sh\n[Shell] ls -la\n[Write] /w/autodos-1/hello.sh';
+  ag.pendingPermissions = [{ id: 'p1', tool: 'Write' }];
+  await a.sync();
+  const acts = l.timeline(t.id).filter((e) => e.type === 'thread.activity').map((e) => e.data.text);
+  assert.deepEqual(acts, ['[Shell] ls -la\n[Write] /w/autodos-1/hello.sh']);
+  assert.equal(a.openDecisions(t.id, 'permission')[0].question, 'Allow Write?\n[Write] /w/autodos-1/hello.sh');
 });
 
 test('only new output is recorded', () => {

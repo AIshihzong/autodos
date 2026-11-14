@@ -93,7 +93,7 @@ export class Autodos {
       if (old?.active) l.update('thread', old.id, { active: false, status: 'replaced' }, { actor: 'system', task: task.id, reason: 'dispatched again' });
       const thread = l.create(
         'thread',
-        { taskId: task.id, machine: 'local', runtime: run.provider || task.runtime || this.provider, agentId: run.agentId, sessionId: run.agentId, cwd: project.path, branch, status: run.status || 'running', active: true, source: 'paseo' },
+        { taskId: task.id, machine: 'local', runtime: run.provider || task.runtime || this.provider, agentId: run.agentId, sessionId: run.agentId, cwd: project.path, branch, prompt, status: run.status || 'running', active: true, source: 'paseo' },
         { actor, task: task.id, reason: 'dispatched to Paseo' },
       );
       return l.update('task', task.id, { state: 'working', threadId: thread.id, branch, machine: 'local', stuck: null, waitingFor: null, waitingKind: null, lastProgressAt: new Date().toISOString() }, { actor, reason: `started ${thread.runtime} on ${branch}` });
@@ -221,16 +221,19 @@ export class Autodos {
     // New output since the last look goes into the timeline. The cursor lives in meta, not in an event.
     const key = `activity:${thread.id}`;
     const seen = l.meta(key)?.text || '';
-    const fresh = newText(seen, st.activity);
+    const project = task.projectId ? l.get('project', task.projectId) : null;
+    const activity = withoutPrompt(st.activity, thread.prompt || (project ? taskPrompt(task, project, thread.branch) : ''));
+    const fresh = newText(seen, activity);
     const now = new Date().toISOString();
 
     l.transaction(() => {
       if (fresh) {
         l.record('thread.activity', { text: fresh, threadId: thread.id }, meta);
-        l.meta(key, { text: st.activity });
+        l.meta(key, { text: activity });
       }
       const cost = Number(st.usage?.CostUsd ?? st.usage?.costUsd);
-      l.update('thread', thread.id, { status: st.status, model: st.model, worktree: st.cwd || thread.worktree || null, ...(Number.isFinite(cost) ? { costUsd: cost } : {}) }, meta);
+      const waiting = st.pendingPermissions.some((p) => p.id);
+      l.update('thread', thread.id, { status: waiting ? 'permission' : st.status, model: st.model, worktree: st.cwd || thread.worktree || null, ...(Number.isFinite(cost) ? { costUsd: cost } : {}) }, meta);
 
       // Permission requests: one open decision each, closed when the request goes away.
       const pending = st.pendingPermissions.filter((p) => p.id);
@@ -238,7 +241,9 @@ export class Autodos {
       for (const d of open) if (!pending.some((p) => p.id === d.permissionId)) l.update('decision', d.id, { open: false, choice: 'gone', decidedBy: 'system' }, { ...meta, reason: 'no longer pending' });
       for (const p of pending) {
         if (open.some((d) => d.permissionId === p.id)) continue;
-        const question = p.description || (p.tool ? `Allow ${p.tool}?` : 'Allow this action?');
+        // Paseo names only the tool; the agent's last line about that tool says what it is about to do.
+        const hint = p.tool ? lastLineAbout(activity, p.tool) : '';
+        const question = p.description || [p.tool ? `Allow ${p.tool}?` : 'Allow this action?', hint].filter(Boolean).join('\n');
         l.create('decision', { taskId: task.id, threadId: thread.id, kind: 'permission', permissionId: p.id, tool: p.tool, question, options: PERMISSION_OPTIONS, reversible: false, open: true, decidedBy: null }, { ...meta, reason: 'the agent asks for permission' });
       }
       const t = l.get('task', task.id);
@@ -267,6 +272,26 @@ export class Autodos {
     });
     return { thread: thread.id, status: st.status };
   }
+}
+
+/** Drop the lines of the task prompt that Paseo echoes back in its log. */
+export function withoutPrompt(text, prompt) {
+  text = String(text || '');
+  if (!prompt) return text.trim();
+  const own = new Set(String(prompt).split('\n').map((x) => x.trim()).filter(Boolean));
+  return text.split('\n').filter((line) => {
+    const x = line.trim();
+    if (!x) return false;
+    const bare = x.replace(/^\[[^\]]*\]\s*/, '').replace(/^(user|you|prompt)\s*[:>]\s*/i, '');
+    return !own.has(x) && !own.has(bare);
+  }).join('\n').trim();
+}
+
+/** The last log line that mentions a tool, e.g. "[Write] src/hello.sh". */
+export function lastLineAbout(text, tool) {
+  const lines = String(text || '').split('\n').map((x) => x.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) if (lines[i].toLowerCase().includes(`[${String(tool).toLowerCase()}`)) return lines[i].slice(0, 300);
+  return '';
 }
 
 /** The part of `next` that comes after what was already seen (log tails overlap). */
