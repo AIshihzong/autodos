@@ -5,12 +5,14 @@ import { useT } from './i18n';
 import { Icon } from './icons';
 import { useDialog } from './ui';
 
-export type Page = 'inbox' | 'workspace' | 'chat' | 'agents' | 'projects' | 'schedules' | 'usage' | 'settings';
+export type Page = 'inbox' | 'workspace' | 'chat' | 'agents' | 'staff' | 'you' | 'projects' | 'schedules' | 'usage' | 'settings';
 export const PAGES: { key: Page; icon: string }[] = [
   { key: 'inbox', icon: 'inbox' },
   { key: 'workspace', icon: 'work' },
   { key: 'chat', icon: 'chat' },
   { key: 'agents', icon: 'agents' },
+  { key: 'staff', icon: 'globe' },
+  { key: 'you', icon: 'spark' },
   { key: 'projects', icon: 'folder' },
   { key: 'schedules', icon: 'clock' },
   { key: 'usage', icon: 'chart' },

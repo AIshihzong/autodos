@@ -139,7 +139,7 @@ export class Workers {
   async #installWorker(target) {
     await this.#sshRun(target, ['command -v node >/dev/null || { echo "node is not installed on this machine" >&2; exit 3; }; mkdir -p ~/.autodos-worker/app']);
     // Only what the worker needs: itself, the runtime adapters and the git helpers.
-    const tar = spawn('tar', ['-cz', '-C', APP_DIR, 'worker/worker.js', 'server/runtimes.js', 'server/git.js', 'server/doctor.js']);
+    const tar = spawn('tar', ['-cz', '-C', APP_DIR, 'worker/worker.js', 'server/runtimes.js', 'server/git.js', 'server/doctor.js', 'server/staff.js']);
     await this.#sshRun(target, ['cd ~/.autodos-worker/app && tar -xz && printf \'{"type":"module"}\' > package.json'], tar.stdout);
   }
 

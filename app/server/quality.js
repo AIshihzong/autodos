@@ -179,15 +179,25 @@ export function protectedHits(files, patterns = []) {
   return files.filter((f) => pats.some((p) => globMatch(p, f) || (p.endsWith('/') && f.startsWith(p))));
 }
 
+/** Extra context every prompt gets (what Autodos learned about the person and the project); set by the app. */
+let memoryExtra = null;
+export function setMemoryExtra(fn) {
+  memoryExtra = fn;
+}
+
 /** Project memory: what the person decided and what they declined, injected into every prompt. */
 export function memoryBlock(project) {
   const m = project?.memory;
-  if (!m || (!m.decisions?.length && !m.declined?.length)) return '';
   const parts = [];
-  const own = (m.decisions || []).filter((x) => x.by !== 'lead');
-  const lead = (m.decisions || []).filter((x) => x.by === 'lead');
+  const own = (m?.decisions || []).filter((x) => x.by !== 'lead');
+  const lead = (m?.decisions || []).filter((x) => x.by === 'lead');
   if (own.length) parts.push(`Decisions the person has made for this project (follow them, don't ask again):\n${own.map((x) => `- ${x.text}`).join('\n')}`);
   if (lead.length) parts.push(`Technical decisions the team's lead has made (follow them unless the person's decisions say otherwise):\n${lead.map((x) => `- ${x.text}`).join('\n')}`);
-  if (m.declined?.length) parts.push(`Things the person declined (don't propose or do them):\n${m.declined.map((x) => `- ${x.text}`).join('\n')}`);
+  if (m?.declined?.length) parts.push(`Things the person declined (don't propose or do them):\n${m.declined.map((x) => `- ${x.text}`).join('\n')}`);
+  let extra = '';
+  try {
+    extra = memoryExtra?.(project) || '';
+  } catch {}
+  if (extra) parts.push(extra);
   return parts.join('\n\n');
 }

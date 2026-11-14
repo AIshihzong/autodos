@@ -48,9 +48,18 @@ export interface Run { id: string; todoId: string; number: number; agentId?: str
 export interface Runtime { id: string; name: string; available: boolean; version: string }
 export interface Settings { concurrency: number; defaultRuntime: string; chiefRuntime: string; claudePermissionMode: string; codexSandbox?: string; useWorktrees: boolean; autoStart: boolean; planFirst: boolean; verify: boolean; verifyAttempts: number; reviewer: string; reviewAutoFix: boolean; budgetMinutes: number; budgetUsd: number; publicUrl?: string; delegateDepth: number; delegateChildren: number; steer?: boolean; selfUpdate?: boolean; keepAwake?: boolean }
 export interface UpdateStatus { possible: boolean; enabled: boolean; checkedAt: string; current: string; available: string; count: number; waiting: boolean; error: string; skipped: string; updatedAt: string; from: string; checking?: boolean }
+export type StaffKind = 'claude' | 'codex' | 'openclaw' | 'hermes';
+export interface StaffMachine { id: string; local: boolean; online?: boolean; name: string; scannedAt: string | null; scanning: boolean; remaining: number; error: string | null; allowed: StaffKind[]; pending: boolean }
+export interface StaffMember {
+  id: string; machine: string; kind: StaffKind; name: string; machineName: string; present: boolean; allowed: boolean; sessions: number; lastAt: string | null; notes: number;
+  projects: { cwd: string; name: string; sessions: number; lastAt: string | null; projectId: string | null }[]; recent: { id: string; title: string; cwd: string; at: string | null; turns: number }[];
+}
+export interface StaffView { machines: StaffMachine[]; members: StaffMember[]; kinds: { id: StaffKind; name: string }[]; notes: { you: number; project: number; agent: number } }
+export interface NoteSource { machine: string; machineName: string; kind: StaffKind | null; session: string; sessionTitle: string; cwd: string; at: string; quote: string }
+export interface Note { id: string; key: string; scope: 'you' | 'project' | 'agent'; text: string; projectId: string | null; cwd: string; staffId: string | null; by: 'distilled' | 'rule' | 'you'; status: 'active' | 'removed'; count: number; sources: NoteSource[]; createdAt: string; updatedAt: string; edited?: boolean }
 export interface State {
   settings: Settings; projects: Project[]; agents: Agent[]; todos: Todo[]; chief: ChiefMessage[]; requirements?: Requirement[]; chiefBusy: boolean; topics: Topic[]; mcpPath: string;
-  workers: Worker[]; pairings: { code: string; words: string[]; host: string; name: string }[]; previews: { todoId: string; url: string; ready: boolean }[]; rules: Rule[]; sources: Source[]; events: EventRec[]; channels: Channel[]; runs: Run[]; runtimes: Runtime[]; dataDir: string; feishu: Feishu;
+  workers: Worker[]; staff?: StaffView; pairings: { code: string; words: string[]; host: string; name: string }[]; previews: { todoId: string; url: string; ready: boolean }[]; rules: Rule[]; sources: Source[]; events: EventRec[]; channels: Channel[]; runs: Run[]; runtimes: Runtime[]; dataDir: string; feishu: Feishu;
 }
 
 // The desktop app passes its server address in the URL hash; the web build talks to its own origin.
@@ -188,6 +197,12 @@ export function useDoctor(watching = false) {
 }
 
 export const actions = {
+  staffConsent: (machine: string, kind: StaffKind, allow: boolean) => api<StaffView>('POST', '/staff/consent', { machine, kind, allow }),
+  staffScan: (machine?: string) => api<StaffView>('POST', '/staff/scan', machine ? { machine } : {}),
+  notes: () => api<{ notes: Note[] }>('GET', '/profile'),
+  addNote: (text: string) => api<Note>('POST', '/profile', { text, scope: 'you' }),
+  editNote: (id: string, body: { text?: string; status?: 'active' | 'removed' }) => api<Note>('PATCH', `/profile/${id}`, body),
+  removeNote: (id: string) => api<Note>('DELETE', `/profile/${id}`),
   fixCheck: (id: CheckId) => api<FixResult>('POST', `/doctor/${id}/fix`, {}),
   say: (text: string, projectId?: string | null, topicId?: string | null) => api('POST', '/chief', { text, projectId, topicId }),
   confirmRequirement: (id: string) => api('POST', `/requirements/${id}/confirm`, {}),

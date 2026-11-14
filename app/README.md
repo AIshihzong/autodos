@@ -84,6 +84,16 @@ npm run worker -- --hub http://localhost:4747 --key cbk_…
 
 The worker connects out to the hub (no open port), long-polls for work, and for each turn checks out the todo branch from the project's git remote `origin`, runs Claude Code or Codex there, commits and pushes the branch back; the hub pulls it into the todo's worktree, so checks, review and merge stay on the hub. Pick the machine per agent (Agents → Machine). Each machine has its own parallel limit. Reach the hub through an SSH tunnel (`ssh -L 4747:localhost:4747 hub-mac`) or a public https tunnel; `/workers/*` only answers to a machine key.
 
+## Your staff, and what Autodos knows about you
+
+Every AI agent on every machine works for you: **Claude Code**, **Codex**, **OpenClaw** and **Hermes**, on this Mac and on every machine you added. **Staff** (left bar) lists them per machine: how many conversations each has had, which folders it worked in, its recent conversations, and how much Autodos learned from it.
+
+- **Nothing is read until you allow it**, per machine and per kind of agent (the switch on each row). Before that, Autodos only looks at whether the agent is there and how many conversation files it has.
+- **Conversations stay on their machine.** Each machine reads its own agents' history (`~/.claude/projects`, `~/.codex/sessions`, `~/.openclaw/agents/*/sessions`, `~/.hermes/sessions`), takes out keys, tokens and passwords, and distils short notes with the agent CLI on that machine (or, without one, picks out the sentences where you state a standing preference). Only the notes, a short quote of your words each rests on, and a summary of each agent are sent to the hub. Conversations Autodos ran itself are skipped.
+- **About you** (left bar) shows what was learned, in three kinds: about you (how you like to work and be reported to, what you always or never want), about each project, and about each agent. Each note shows where it came from. Edit one, remove one (it does not come back on the next pass), or write your own.
+- **Every prompt reads it**: the lead, the analyst, the reviewer and every agent get the notes about you, and the notes about the project they work on, next to the project memory.
+- Machines look again every 30 minutes, working through long histories a few conversations at a time; **Look again** asks for a fresh pass now. Setting `staffModel` to `false` (`PATCH /api/settings`) keeps distilling to the rule-based pass, with no model call.
+
 ## Weekly retro
 
 Usage → Weekly retro shows the last 7 days: done and created todos, rework rate, checks green on the first try, review findings, merge conflicts, median time to done, the most reworked todos and recurring problems. *Ask the lead to write it up* (or say "retro" / "周回顾") posts a summary with suggestions in the conversation.
