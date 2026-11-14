@@ -100,12 +100,16 @@ window.__ModuleLoader__.load({
       if (s < 129600) return `${Math.round(s / 3600)}h`;
       return `${Math.round(s / 86400)}d`;
     };
-    // The task's own words when it has them, else the translated kind ("Review the change").
+    // What the task waits on you for: the translated kind first ("评审改动"), then the task's own words, if any.
     const needs = (t, r) => {
-      if (typeof r.waitingFor !== 'string') r = { ...r, waitingFor: null };
-      if (!r.waitingFor && !r.waitingKind) return '';
-      const label = r.waitingKind ? t(`w_${r.waitingKind}`) : '';
-      return r.waitingFor && r.waitingFor !== DICT.en[`w_${r.waitingKind}`] ? r.waitingFor : label || r.waitingFor;
+      const note = typeof r.waitingFor === 'string' && r.waitingFor && r.waitingFor !== DICT.en[`w_${r.waitingKind}`] && r.waitingFor !== 'Needs you' ? r.waitingFor : '';
+      const label = r.waitingKind ? t(`w_${r.waitingKind}`) : r.state === 'waiting_you' && !note ? t('needs') : '';
+      return { label, note };
+    };
+    const Needs = ({ t, r }) => {
+      const { label, note } = needs(t, r);
+      if (!label && !note) return null;
+      return h('div', null, label ? h('div', null, label) : null, note ? h('div', { style: { opacity: 0.65, fontSize: 12 } }, note) : null);
     };
     const fill = (s, n) => String(s).replace('{0}', n);
     const tone = { waiting_you: '#c2410c', stuck: '#b91c1c', working: '#1d4ed8', landing: '#047857', done: '#047857', failed: '#b91c1c' };
@@ -152,7 +156,7 @@ window.__ModuleLoader__.load({
               h('div', null, [r.who.machine, r.who.staff].filter(Boolean).join(' · ') || t('none')),
               h('div', null, h('span', { style: css.pill(r.state) }, t(`s_${r.state}`))),
               h('div', null,
-                needs(t, r) ? h('div', null, needs(t, r)) : null,
+                h(Needs, { t, r }),
                 r.stuck ? h('div', { style: { color: tone.stuck } }, `${t('stuck')}: ${r.stuck.split('\n')[0].slice(0, 200)}`) : null),
               h('div', { style: css.muted, title: r.lastProgressAt }, ago(r.lastProgressAt))))),
         data?.imported && h('div', { style: { ...css.muted, marginTop: 16, fontSize: 12 } }, `${t('imported')} · ${data.imported.at}`));
@@ -170,7 +174,8 @@ window.__ModuleLoader__.load({
       return h('div', { style: css.page },
         h('button', { style: { ...css.btn, marginBottom: 12 }, onClick: onBack }, t('back')),
         h('h1', { style: css.h1 }, `${task.number ? `#${task.number} ` : ''}${task.title}`),
-        h('p', null, h('span', { style: css.pill(task.state) }, t(`s_${task.state}`)), ' ', needs(t, task)),
+        h('p', null, h('span', { style: css.pill(task.state) }, t(`s_${task.state}`))),
+        h(Needs, { t, r: task }),
         task.stuck ? h('pre', { style: { whiteSpace: 'pre-wrap', color: tone.stuck } }, task.stuck) : null,
         task.description ? h('p', { style: { whiteSpace: 'pre-wrap' } }, task.description) : null,
         d.threads.length ? h('div', null, h('h3', null, t('threads')), d.threads.map((th) => h('div', { key: th.id, style: css.muted }, [th.machine, th.runtime, th.branch, th.worktree].filter(Boolean).join(' · ')))) : null,
