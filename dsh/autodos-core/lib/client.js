@@ -39,6 +39,13 @@ window.__ModuleLoader__.load({
         s_failed: '失败',
         s_dropped: '已关闭',
         none: '无',
+        more: '另 {0} 项',
+        w_confirm_plan: '确认计划',
+        w_confirm_start: '开工前确认',
+        w_answer: '回答一个问题',
+        w_review: '评审改动',
+        w_lead_hold: '负责人在等你决定',
+        w_retry: '回复或重试',
       },
       en: {
         panel: 'Tasks',
@@ -68,6 +75,13 @@ window.__ModuleLoader__.load({
         s_failed: 'Failed',
         s_dropped: 'Closed',
         none: 'none',
+        more: '{0} more',
+        w_confirm_plan: 'Confirm the plan',
+        w_confirm_start: 'Confirm before it starts',
+        w_answer: 'Answer a question',
+        w_review: 'Review the change',
+        w_lead_hold: 'The lead is holding it for you',
+        w_retry: 'Reply or retry',
       },
     };
 
@@ -86,7 +100,15 @@ window.__ModuleLoader__.load({
       if (s < 129600) return `${Math.round(s / 3600)}h`;
       return `${Math.round(s / 86400)}d`;
     };
+    // The task's own words when it has them, else the translated kind ("Review the change").
+    const needs = (t, r) => {
+      if (!r.waitingFor && !r.waitingKind) return '';
+      const label = r.waitingKind ? t(`w_${r.waitingKind}`) : '';
+      return r.waitingFor && r.waitingFor !== DICT.en[`w_${r.waitingKind}`] ? r.waitingFor : label || r.waitingFor;
+    };
+    const fill = (s, n) => String(s).replace('{0}', n);
     const tone = { waiting_you: '#c2410c', stuck: '#b91c1c', working: '#1d4ed8', landing: '#047857', done: '#047857', failed: '#b91c1c' };
+    const MAX_OUTPUTS = 3;
 
     const css = {
       page: { padding: '20px 24px', overflow: 'auto', height: '100%', boxSizing: 'border-box', fontSize: 13 },
@@ -124,10 +146,13 @@ window.__ModuleLoader__.load({
               h('div', null,
                 h('div', { style: { fontWeight: 500 } }, `${r.number ? `#${r.number} ` : ''}${r.title}`),
                 h('div', { style: css.muted }, r.goal?.name || r.project?.name || ''),
-                r.outputs.length ? h('div', { style: { ...css.muted, fontSize: 12 } }, `${t('outputs')}: ${r.outputs.map((o) => o.title).join(', ')}`) : null),
+                r.outputs.length ? h('div', { style: { ...css.muted, fontSize: 12 } },
+                  `${t('outputs')}: ${r.outputs.slice(0, MAX_OUTPUTS).map((o) => o.title).join(', ')}${r.outputs.length > MAX_OUTPUTS ? `, ${fill(t('more'), r.outputs.length - MAX_OUTPUTS)}` : ''}`) : null),
               h('div', null, [r.who.machine, r.who.staff].filter(Boolean).join(' · ') || t('none')),
               h('div', null, h('span', { style: css.pill(r.state) }, t(`s_${r.state}`))),
-              h('div', null, r.waitingFor || (r.stuck ? r.stuck.split('\n')[0].slice(0, 200) : '')),
+              h('div', null,
+                needs(t, r) ? h('div', null, needs(t, r)) : null,
+                r.stuck ? h('div', { style: { color: tone.stuck } }, `${t('stuck')}: ${r.stuck.split('\n')[0].slice(0, 200)}`) : null),
               h('div', { style: css.muted, title: r.lastProgressAt }, ago(r.lastProgressAt))))),
         data?.imported && h('div', { style: { ...css.muted, marginTop: 16, fontSize: 12 } }, `${t('imported')} · ${data.imported.at}`));
     }
@@ -144,7 +169,8 @@ window.__ModuleLoader__.load({
       return h('div', { style: css.page },
         h('button', { style: { ...css.btn, marginBottom: 12 }, onClick: onBack }, t('back')),
         h('h1', { style: css.h1 }, `${task.number ? `#${task.number} ` : ''}${task.title}`),
-        h('p', null, h('span', { style: css.pill(task.state) }, t(`s_${task.state}`)), ' ', task.waitingFor || task.stuck || ''),
+        h('p', null, h('span', { style: css.pill(task.state) }, t(`s_${task.state}`)), ' ', needs(t, task)),
+        task.stuck ? h('pre', { style: { whiteSpace: 'pre-wrap', color: tone.stuck } }, task.stuck) : null,
         task.description ? h('p', { style: { whiteSpace: 'pre-wrap' } }, task.description) : null,
         d.threads.length ? h('div', null, h('h3', null, t('threads')), d.threads.map((th) => h('div', { key: th.id, style: css.muted }, [th.machine, th.runtime, th.branch, th.worktree].filter(Boolean).join(' · ')))) : null,
         d.outputs.length ? h('div', null, h('h3', null, t('outputs')), d.outputs.map((o) => h('div', { key: o.id }, o.url ? h('a', { href: o.url, target: '_blank', rel: 'noreferrer' }, o.title) : o.title))) : null,

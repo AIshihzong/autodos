@@ -16,10 +16,12 @@ export function taskState(t) {
   return 'queued';
 }
 
-const OPEN = new Set(['waiting_you', 'stuck', 'working', 'review', 'queued', 'landing']);
+// Failed tasks stay on the board: in Autodos they wait for the person to reply or retry.
+const OPEN = new Set(['waiting_you', 'stuck', 'failed', 'working', 'review', 'queued', 'landing']);
+const ORDER = ['waiting_you', 'stuck', 'failed', ...TASK_STATES.filter((s) => !['waiting_you', 'stuck', 'failed'].includes(s))];
 const rank = (s) => {
-  const i = TASK_STATES.indexOf(s);
-  return i < 0 ? TASK_STATES.length : i;
+  const i = ORDER.indexOf(s);
+  return i < 0 ? ORDER.length : i;
 };
 
 /**
@@ -60,7 +62,8 @@ export function board(ledger, { open = true, projectId, goalId, limit = 200 } = 
       who: { staff: s ? s.name : null, staffId: t.staffId || null, machine: m ? m.name : t.machine || null, runtime: t.runtime || s?.runtime || null },
       state: t.state,
       stuck: t.stuck || null,
-      waitingFor: t.state === 'waiting_you' ? t.waitingFor || decisions.get(t.id)?.question || 'Needs you' : null,
+      waitingFor: t.state === 'waiting_you' ? t.waitingFor || decisions.get(t.id)?.question || 'Needs you' : t.state === 'failed' ? t.waitingFor || 'Reply or retry' : null,
+      waitingKind: t.state === 'waiting_you' || t.state === 'failed' ? t.waitingKind || null : null,
       decision: decisions.get(t.id) || null,
       lastProgressAt: t.lastProgressAt || t.updatedAt,
       outputs: outputs.get(t.id) || [],
@@ -89,11 +92,11 @@ export function taskDetail(ledger, taskId) {
 /** A short plain-text board, for the chief of staff to read in a tool result. */
 export function boardText(b) {
   if (!b.rows.length) return 'No open tasks.';
-  const label = { waiting_you: 'WAITING ON YOU', stuck: 'STUCK', working: 'working', review: 'in review', queued: 'queued', landing: 'landing', done: 'done', failed: 'failed', dropped: 'dropped' };
+  const label = { waiting_you: 'WAITING ON YOU', stuck: 'STUCK', failed: 'FAILED', working: 'working', review: 'in review', queued: 'queued', landing: 'landing', done: 'done', dropped: 'dropped' };
   const lines = b.rows.map((r) => {
     const who = [r.who.machine, r.who.staff].filter(Boolean).join(' · ') || 'unassigned';
     const where = r.goal?.name || r.project?.name || 'no project';
-    const extra = r.waitingFor ? ` — needs: ${r.waitingFor}` : r.stuck ? ` — stuck: ${r.stuck.split('\n')[0].slice(0, 160)}` : '';
+    const extra = (r.waitingFor ? ` — needs: ${r.waitingFor}` : '') + (r.stuck ? ` — stuck: ${r.stuck.split('\n')[0].slice(0, 160)}` : '');
     return `- [${label[r.state] || r.state}] ${r.number ? `#${r.number} ` : ''}${r.title} (${where}; ${who}; last moved ${r.lastProgressAt})${extra}`;
   });
   return `${b.total} open task(s):\n${lines.join('\n')}`;

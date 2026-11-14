@@ -45,12 +45,28 @@ function messageActor(m, task) {
 
 /** What a waiting task waits on the person for, in words. */
 export function waitingFor(t) {
-  if (t.phase === 'confirm') return t.plan ? 'Confirm the plan' : 'Confirm before it starts';
-  if (t.phase === 'asking') return t.question || t.leadAsk || 'Answer a question';
-  if (t.phase === 'review') return t.gateReason || 'Review the change';
-  if (t.leadHold || t.leadPending) return t.leadAsk || t.question || 'The lead is holding it for you';
+  const w = waiting(t);
+  return w ? w.note || WAITING_TEXT[w.kind] : null;
+}
+
+/** Why a task waits on the person: a kind (for translated labels) and the task's own words, if any. */
+export function waiting(t) {
+  if (t.phase === 'confirm') return { kind: t.plan ? 'confirm_plan' : 'confirm_start', note: null };
+  if (t.phase === 'asking') return { kind: 'answer', note: t.question || t.leadAsk || null };
+  if (t.phase === 'review') return { kind: 'review', note: t.gateReason || null };
+  if (t.leadHold || t.leadPending) return { kind: 'lead_hold', note: t.leadAsk || t.question || null };
+  if (t.phase === 'failed') return { kind: 'retry', note: null };
   return null;
 }
+
+export const WAITING_TEXT = {
+  confirm_plan: 'Confirm the plan',
+  confirm_start: 'Confirm before it starts',
+  answer: 'Answer a question',
+  review: 'Review the change',
+  lead_hold: 'The lead is holding it for you',
+  retry: 'Reply or retry',
+};
 
 /**
  * Import an Autodos db.json object into an empty ledger.
@@ -103,7 +119,8 @@ export function importAutodos(ledger, data, { source = 'db.json' } = {}) {
         runtime: t.runtime || null,
         state,
         phase: t.phase,
-        waitingFor: state === 'waiting_you' ? waitingFor(t) : null,
+        waitingFor: state === 'waiting_you' || state === 'failed' ? waitingFor(t) : null,
+        waitingKind: state === 'waiting_you' || state === 'failed' ? waiting(t)?.kind || null : null,
         stuck: t.error ? String(t.error).slice(0, 500) : null,
         labels: t.labels || [],
         ...pick(t, ['ref', 'mode', 'stage', 'revision', 'leadRounds', 'scheduleId', 'ruleId', 'topicId', 'backlogKey']),

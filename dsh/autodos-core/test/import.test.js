@@ -29,6 +29,7 @@ function fixture() {
       { id: 't4', number: 104, title: 'Old spike', projectId: 'p_art', phase: 'done', branch: 'autodos/104', mergeLanded: true, evidence: [{ kind: 'image', file: 'shot.png' }], createdAt: at(1), updatedAt: at(2) },
       { id: 't5', number: 105, title: 'Flaky build', projectId: 'p_art', phase: 'queued', error: 'npm test failed\nat line 3', createdAt: at(1), updatedAt: at(4) },
       { id: 't6', number: 106, title: 'Dropped', phase: 'closed', createdAt: at(1), updatedAt: at(1) },
+      { id: 't7', number: 107, title: 'Out of budget', projectId: 'p_art', phase: 'failed', error: 'budget exhausted', createdAt: at(1), updatedAt: at(3) },
     ],
     chief: [{ id: 'c1', role: 'user', text: 'Ship the gallery this week', at: at(1) }, { id: 'c2', role: 'assistant', text: 'Filed #101', at: at(2) }],
     rules: [{ id: 'ru1', name: 'nightly', cron: '0 3 * * *' }],
@@ -47,8 +48,8 @@ test('phases map to board states', () => {
 test('the Autodos board imports completely, once', () => {
   const l = new Ledger(':memory:');
   const counts = importAutodos(l, fixture(), { source: 'fixture' });
-  assert.deepEqual(counts, { project: 1, staff: 2, machine: 2, requirement: 1, task: 6, thread: 3, output: 3, decision: 2, message: 2, chat: 2, rule: 1 });
-  assert.equal(l.list('task').length, 6);
+  assert.deepEqual(counts, { project: 1, staff: 2, machine: 2, requirement: 1, task: 7, thread: 3, output: 3, decision: 2, message: 2, chat: 2, rule: 1 });
+  assert.equal(l.list('task').length, 7);
   assert.equal(l.get('settings', 'autodos').budgetUsd, 3);
   assert.equal(l.get('machine', 'studio').name, 'studio');
   assert.throws(() => importAutodos(l, fixture()), /already imported/);
@@ -68,9 +69,13 @@ test('the board puts what waits on you first and says who, where and why', () =>
   const l = new Ledger(':memory:');
   importAutodos(l, fixture());
   const b = board(l);
-  assert.deepEqual(b.rows.map((r) => r.number), [103, 102, 105, 101]);
-  assert.deepEqual(b.byState, { waiting_you: 2, stuck: 1, working: 1 });
-  const [review, ask, stuck, working] = b.rows;
+  assert.deepEqual(b.rows.map((r) => r.number), [103, 102, 105, 107, 101]);
+  assert.deepEqual(b.byState, { waiting_you: 2, stuck: 1, failed: 1, working: 1 });
+  const [review, ask, stuck, failed, working] = b.rows;
+  assert.equal(failed.waitingFor, 'Reply or retry');
+  assert.equal(failed.waitingKind, 'retry');
+  assert.equal(failed.stuck, 'budget exhausted');
+  assert.equal(review.waitingKind, 'review');
   assert.equal(review.waitingFor, 'Changes the database');
   assert.equal(review.who.machine, 'studio');
   assert.equal(review.who.staff, 'Backend engineer');
@@ -79,10 +84,11 @@ test('the board puts what waits on you first and says who, where and why', () =>
   assert.equal(ask.waitingFor, 'Monthly or yearly first?');
   assert.equal(stuck.stuck, 'npm test failed\nat line 3');
   assert.equal(working.project.name, 'Artist crew');
-  assert.equal(board(l, { open: false }).total, 6);
+  assert.equal(board(l, { open: false }).total, 7);
   const text = boardText(b);
   assert.match(text, /WAITING ON YOU\] #103 Upload API/);
   assert.match(text, /needs: Monthly or yearly first\?/);
+  assert.match(text, /\[FAILED\] #107 Out of budget .* — needs: Reply or retry — stuck: budget exhausted/);
 });
 
 test('the plugin imports on first open, then serves tools and routes', async () => {
@@ -93,16 +99,16 @@ test('the plugin imports on first open, then serves tools and routes', async () 
   const config = { dataDir: path.join(dir, 'ledger'), autodosData: db };
   const logs = [];
   const l = plugin.openLedger(config, { log: (m) => logs.push(m) });
-  assert.match(logs[0], /6 tasks, 1 projects, 4 messages/);
+  assert.match(logs[0], /7 tasks, 1 projects, 4 messages/);
   assert.equal(fs.readFileSync(db, 'utf8'), before, 'the old board is never written');
   assert.equal(importAutodosFile(l, path.join(dir, 'missing.json')), null);
 
   const [boardTool, taskTool] = plugin.tools(l);
   const b = await boardTool.execute({});
-  assert.equal(b.total, 4);
-  assert.match(boardTool.output.render({}, b)[0].text, /4 open task/);
+  assert.equal(b.total, 5);
+  assert.match(boardTool.output.render({}, b)[0].text, /5 open task/);
   const all = await boardTool.execute({ all: true });
-  assert.equal(all.total, 6);
+  assert.equal(all.total, 7);
   const d = await taskTool.execute({ task: '#103' });
   assert.equal(d.task.title, 'Upload API');
   await assert.rejects(taskTool.execute({ task: '#999' }), /No task/);
@@ -111,9 +117,9 @@ test('the plugin imports on first open, then serves tools and routes', async () 
   const res = await boardRoute.fetch(new Request('http://dsh.local/api/autodos/board'));
   const body = await res.json();
   assert.equal(body.ok, true);
-  assert.equal(body.rows.length, 4);
-  assert.equal(body.counts.task, 6);
-  assert.equal(body.imported.counts.task, 6);
+  assert.equal(body.rows.length, 5);
+  assert.equal(body.counts.task, 7);
+  assert.equal(body.imported.counts.task, 7);
   const miss = await taskRoute.fetch(new Request('http://dsh.local/api/autodos/task?id=nope'));
   assert.equal(miss.status, 404);
   l.close();
@@ -121,7 +127,7 @@ test('the plugin imports on first open, then serves tools and routes', async () 
   // Reopening does not import again.
   const again = plugin.openLedger(config, { log: (m) => logs.push(m) });
   assert.equal(logs.length, 1);
-  assert.equal(again.list('task').length, 6);
+  assert.equal(again.list('task').length, 7);
   again.close();
 });
 
