@@ -69,6 +69,8 @@ export const WAITING_TEXT = {
   review: 'Review the change',
   lead_hold: 'The lead is holding it for you',
   retry: 'Reply or retry',
+  result: 'Look at the result',
+  permission: 'Allow or deny an action',
 };
 
 /**

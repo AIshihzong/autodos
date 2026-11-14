@@ -2,6 +2,7 @@
 // Every row answers: what is it, which goal or project, who is on it (machine · staff),
 // what state, where it is stuck, what it waits on you for, when it last moved, what it delivered.
 import { TASK_STATES } from './store.js';
+import { WAITING_TEXT } from './import.js';
 
 /** Map an old Autodos todo phase (and its flags) to a board state. */
 export function taskState(t) {
@@ -63,7 +64,7 @@ export function board(ledger, { open = true, projectId, goalId, limit = 200 } = 
       who: { staff: s ? s.name : null, staffId: t.staffId || null, machine: m ? m.name : t.machine || null, runtime: t.runtime || s?.runtime || null },
       state: t.state,
       stuck: str(t.stuck),
-      waitingFor: t.state === 'waiting_you' ? str(t.waitingFor) || str(decisions.get(t.id)?.question) || 'Needs you' : t.state === 'failed' ? str(t.waitingFor) || 'Reply or retry' : null,
+      waitingFor: t.state === 'waiting_you' ? str(t.waitingFor) || (t.waitingKind ? null : str(decisions.get(t.id)?.question)) || (t.waitingKind ? WAITING_TEXT[t.waitingKind] || null : 'Needs you') : t.state === 'failed' ? str(t.waitingFor) || 'Reply or retry' : null,
       waitingKind: t.state === 'waiting_you' || t.state === 'failed' ? t.waitingKind || null : null,
       decision: decisions.get(t.id) || null,
       lastProgressAt: t.lastProgressAt || t.updatedAt,

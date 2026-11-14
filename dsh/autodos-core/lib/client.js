@@ -46,6 +46,29 @@ window.__ModuleLoader__.load({
         w_review: '评审改动',
         w_lead_hold: '负责人在等你决定',
         w_retry: '回复或重试',
+        w_result: '看结果：通过或说要改什么',
+        w_permission: '允许或拒绝一个操作',
+        new_task: '新建任务',
+        f_title: '标题',
+        f_desc: '说明（交给 agent 的任务描述）',
+        f_project: '项目',
+        f_start: '立刻开工',
+        create: '创建',
+        cancel: '取消',
+        reply: '回复',
+        reply_ph: '对 agent 说点什么…',
+        send: '发送',
+        retry: '重试',
+        start: '开工',
+        drop: '关闭任务',
+        note_ph: '要改什么（选“继续改”时必填）',
+        o_Allow: '允许',
+        o_Deny: '拒绝',
+        o_Accept: '通过',
+        'o_Keep working': '继续改',
+        irreversible: '这一步可能无法撤销',
+        no_exec: '执行层（Paseo）没有配置，只能看不能派工。',
+        working_on: '处理中…',
       },
       en: {
         panel: 'Tasks',
@@ -82,6 +105,29 @@ window.__ModuleLoader__.load({
         w_review: 'Review the change',
         w_lead_hold: 'The lead is holding it for you',
         w_retry: 'Reply or retry',
+        w_result: 'Look at the result: accept, or say what to change',
+        w_permission: 'Allow or deny an action',
+        new_task: 'New task',
+        f_title: 'Title',
+        f_desc: 'Description (the brief the agent works from)',
+        f_project: 'Project',
+        f_start: 'Start now',
+        create: 'Create',
+        cancel: 'Cancel',
+        reply: 'Reply',
+        reply_ph: 'Say something to the agent…',
+        send: 'Send',
+        retry: 'Retry',
+        start: 'Start',
+        drop: 'Close task',
+        note_ph: 'What to change (needed for “Keep working”)',
+        o_Allow: 'Allow',
+        o_Deny: 'Deny',
+        o_Accept: 'Accept',
+        'o_Keep working': 'Keep working',
+        irreversible: 'This may not be undoable',
+        no_exec: 'No execution layer (Paseo) is configured: read only.',
+        working_on: 'Working…',
       },
     };
 
@@ -90,6 +136,33 @@ window.__ModuleLoader__.load({
       const body = await res.json().catch(() => undefined);
       if (!res.ok || body?.ok !== true) throw new Error(body?.error || `HTTP ${res.status}`);
       return body;
+    }
+
+    async function act(body) {
+      const res = await fetch('/api/autodos/action', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const out = await res.json().catch(() => undefined);
+      if (!res.ok || out?.ok !== true) throw new Error(out?.error || `HTTP ${res.status}`);
+      return out.result;
+    }
+
+    // Run an action, show "working" while it runs and the error if it fails, then refresh.
+    function useAction(after) {
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState('');
+      const run = useCallback(async (body) => {
+        setBusy(true);
+        setError('');
+        try {
+          const r = await act(body);
+          after?.(r);
+          return r;
+        } catch (e) {
+          setError(e.message);
+        } finally {
+          setBusy(false);
+        }
+      }, [after]);
+      return { busy, error, run };
     }
 
     const ago = (iso) => {
@@ -124,13 +197,48 @@ window.__ModuleLoader__.load({
       th: { fontWeight: 600, cursor: 'default' },
       pill: (s) => ({ display: 'inline-block', padding: '1px 8px', borderRadius: 10, fontSize: 12, border: `1px solid ${tone[s] || 'rgba(127,127,127,.5)'}`, color: tone[s] || 'inherit' }),
       btn: { padding: '4px 10px', borderRadius: 6, border: '1px solid rgba(127,127,127,.4)', background: 'transparent', color: 'inherit', cursor: 'pointer' },
+      input: { width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, border: '1px solid rgba(127,127,127,.4)', background: 'transparent', color: 'inherit', font: 'inherit' },
+      primary: { padding: '4px 12px', borderRadius: 6, border: '1px solid #1d4ed8', background: '#1d4ed8', color: '#fff', cursor: 'pointer' },
+      card: { border: '1px solid rgba(127,127,127,.3)', borderRadius: 8, padding: 12, margin: '12px 0' },
+      err: { color: '#b91c1c', margin: '6px 0' },
       ev: { padding: '6px 0', borderTop: '1px solid rgba(127,127,127,.15)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
     };
+
+    function NewTask({ t, onDone, onCancel }) {
+      const [projects, setProjects] = useState(null);
+      const [exec, setExec] = useState(true);
+      const [f, setF] = useState({ title: '', description: '', project: '', start: true });
+      const { busy, error, run } = useAction(onDone);
+      useEffect(() => {
+        getJson('/api/autodos/projects').then((d) => {
+          setProjects(d.projects);
+          setExec(d.execution);
+          setF((x) => ({ ...x, project: x.project || d.projects.find((p) => p.path)?.id || '' }));
+        }, () => setProjects([]));
+      }, []);
+      const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+      return h('div', { style: css.card },
+        h('div', { style: { display: 'grid', gap: 8 } },
+          h('input', { style: css.input, placeholder: t('f_title'), value: f.title, onChange: set('title'), autoFocus: true }),
+          h('textarea', { style: { ...css.input, minHeight: 90 }, placeholder: t('f_desc'), value: f.description, onChange: set('description') }),
+          h('div', { style: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' } },
+            h('label', null, `${t('f_project')} `,
+              h('select', { style: { ...css.input, width: 'auto' }, value: f.project, onChange: set('project') },
+                h('option', { value: '' }, t('none')),
+                (projects || []).map((p) => h('option', { key: p.id, value: p.id }, p.name)))),
+            h('label', { style: { display: 'flex', gap: 4, alignItems: 'center' } }, h('input', { type: 'checkbox', checked: f.start && exec, disabled: !exec, onChange: set('start') }), t('f_start')),
+            h('span', { style: { flex: 1 } }),
+            h('button', { style: css.btn, onClick: onCancel }, t('cancel')),
+            h('button', { style: css.primary, disabled: busy || !f.title.trim(), onClick: () => run({ action: 'create_task', title: f.title.trim(), description: f.description, project: f.project || undefined, start: f.start && exec && Boolean(f.project) }) }, busy ? t('working_on') : t('create')))),
+        !exec ? h('div', { style: css.muted }, t('no_exec')) : null,
+        error ? h('div', { style: css.err }, error) : null);
+    }
 
     function Board({ t, onOpen }) {
       const [data, setData] = useState(null);
       const [error, setError] = useState('');
       const [all, setAll] = useState(false);
+      const [adding, setAdding] = useState(false);
       const load = useCallback(() => getJson(`/api/autodos/board${all ? '?all=1' : ''}`).then((d) => (setData(d), setError('')), (e) => setError(e.message)), [all]);
       useEffect(() => {
         load();
@@ -142,7 +250,9 @@ window.__ModuleLoader__.load({
           h('h1', { style: css.h1 }, t('title')),
           data && h('span', { style: css.muted }, `${data.total}`),
           h('label', { style: { display: 'flex', gap: 4, alignItems: 'center' } }, h('input', { type: 'checkbox', checked: all, onChange: (e) => setAll(e.target.checked) }), t('all')),
-          h('button', { style: css.btn, onClick: load }, t('refresh'))),
+          h('button', { style: css.btn, onClick: load }, t('refresh')),
+          h('button', { style: css.primary, onClick: () => setAdding(true) }, t('new_task'))),
+        adding ? h(NewTask, { t, onCancel: () => setAdding(false), onDone: (task) => { setAdding(false); load(); if (task?.id) onOpen(task.id); } }) : null,
         error && h('div', { style: { color: '#b91c1c', marginBottom: 8 } }, error),
         !data ? h('div', { style: css.muted }, t('loading')) : !data.rows.length ? h('div', { style: css.muted }, t('empty')) :
           h('div', null,
@@ -162,28 +272,60 @@ window.__ModuleLoader__.load({
         data?.imported && h('div', { style: { ...css.muted, marginTop: 16, fontSize: 12 } }, `${t('imported')} · ${data.imported.at}`));
     }
 
+    function Decision({ t, d, onDone }) {
+      const [note, setNote] = useState('');
+      const { busy, error, run } = useAction(onDone);
+      const options = d.options || [];
+      return h('div', { style: css.card },
+        h('div', { style: { fontWeight: 500, marginBottom: 6 } }, d.kind === 'permission' ? `${t('w_permission')}${d.tool ? ` · ${d.tool}` : ''}` : d.kind === 'result' ? t('w_result') : d.question),
+        d.kind ? h('div', { style: { whiteSpace: 'pre-wrap', marginBottom: 6 } }, d.question) : null,
+        d.reversible === false ? h('div', { style: { ...css.muted, fontSize: 12, marginBottom: 6 } }, t('irreversible')) : null,
+        d.kind === 'result' || d.kind === 'permission' ? h('textarea', { style: { ...css.input, minHeight: 50, marginBottom: 6 }, placeholder: t('note_ph'), value: note, onChange: (e) => setNote(e.target.value) }) : null,
+        h('div', { style: { display: 'flex', gap: 8 } },
+          options.map((o, i) => h('button', { key: o, style: i === 0 ? css.primary : css.btn, disabled: busy, onClick: () => run({ action: 'decide', decision: d.id, choice: o, note: note.trim() || undefined }) }, t(`o_${o}`) || o))),
+        error ? h('div', { style: css.err }, error) : null);
+    }
+
     function Detail({ t, id, onBack }) {
       const [d, setD] = useState(null);
       const [error, setError] = useState('');
+      const [text, setText] = useState('');
+      const load = useCallback(() => getJson(`/api/autodos/task?id=${encodeURIComponent(id)}`).then((x) => (setD(x), setError('')), (e) => setError(e.message)), [id]);
       useEffect(() => {
-        getJson(`/api/autodos/task?id=${encodeURIComponent(id)}`).then(setD, (e) => setError(e.message));
-      }, [id]);
-      if (error) return h('div', { style: css.page }, h('button', { style: css.btn, onClick: onBack }, t('back')), h('p', null, error));
+        load();
+        const timer = setInterval(load, 4000);
+        return () => clearInterval(timer);
+      }, [load]);
+      const { busy, error: actError, run } = useAction(load);
+      if (error && !d) return h('div', { style: css.page }, h('button', { style: css.btn, onClick: onBack }, t('back')), h('p', null, error));
       if (!d) return h('div', { style: css.page }, t('loading'));
       const task = d.task;
+      const thread = d.threads.find((x) => x.id === task.threadId);
+      const finished = ['done', 'dropped'].includes(task.state);
+      const open = d.decisions.filter((x) => x.open);
       return h('div', { style: css.page },
         h('button', { style: { ...css.btn, marginBottom: 12 }, onClick: onBack }, t('back')),
         h('h1', { style: css.h1 }, `${task.number ? `#${task.number} ` : ''}${task.title}`),
-        h('p', null, h('span', { style: css.pill(task.state) }, t(`s_${task.state}`))),
+        h('p', null, h('span', { style: css.pill(task.state) }, t(`s_${task.state}`)), thread?.costUsd != null ? h('span', { style: { ...css.muted, marginLeft: 8 } }, `$${Number(thread.costUsd).toFixed(2)}`) : null),
         h(Needs, { t, r: task }),
         task.stuck ? h('pre', { style: { whiteSpace: 'pre-wrap', color: tone.stuck } }, task.stuck) : null,
+        open.map((x) => h(Decision, { key: x.id, t, d: x, onDone: load })),
+        !finished ? h('div', { style: css.card },
+          h('textarea', { style: { ...css.input, minHeight: 60 }, placeholder: t('reply_ph'), value: text, onChange: (e) => setText(e.target.value) }),
+          h('div', { style: { display: 'flex', gap: 8, marginTop: 6 } },
+            h('button', { style: css.primary, disabled: busy || !text.trim(), onClick: () => run({ action: 'reply', task: task.id, text: text.trim() }).then((r) => r && setText('')) }, t('send')),
+            !thread?.active && task.projectId ? h('button', { style: css.btn, disabled: busy, onClick: () => run({ action: task.threadId || task.stuck || task.state === 'failed' ? 'retry' : 'dispatch', task: task.id }) }, task.threadId || task.stuck || task.state === 'failed' ? t('retry') : t('start')) : null,
+            thread?.active && (task.stuck || task.state === 'failed') ? h('button', { style: css.btn, disabled: busy, onClick: () => run({ action: 'retry', task: task.id }) }, t('retry')) : null,
+            h('span', { style: { flex: 1 } }),
+            h('button', { style: css.btn, disabled: busy, onClick: () => run({ action: 'drop', task: task.id }) }, t('drop'))),
+          actError ? h('div', { style: css.err }, actError) : null) : null,
         task.description ? h('p', { style: { whiteSpace: 'pre-wrap' } }, task.description) : null,
-        d.threads.length ? h('div', null, h('h3', null, t('threads')), d.threads.map((th) => h('div', { key: th.id, style: css.muted }, [th.machine, th.runtime, th.branch, th.worktree].filter(Boolean).join(' · ')))) : null,
+        d.threads.length ? h('div', null, h('h3', null, t('threads')), d.threads.map((th) => h('div', { key: th.id, style: css.muted }, [th.active ? '●' : null, th.machine, th.runtime, th.model, th.status, th.branch, th.worktree].filter(Boolean).join(' · ')))) : null,
         d.outputs.length ? h('div', null, h('h3', null, t('outputs')), d.outputs.map((o) => h('div', { key: o.id }, o.url ? h('a', { href: o.url, target: '_blank', rel: 'noreferrer' }, o.title) : o.title))) : null,
-        d.decisions.length ? h('div', null, h('h3', null, t('decisions')), d.decisions.map((x) => h('div', { key: x.id }, `${x.open ? '● ' : ''}${x.question}`))) : null,
+        d.decisions.length > open.length ? h('div', null, h('h3', null, t('decisions')), d.decisions.filter((x) => !x.open).map((x) => h('div', { key: x.id, style: css.muted }, `${x.question} → ${x.choice ?? ''}`))) : null,
         h('h3', null, `${t('timeline')} (${d.timeline.length})`),
-        d.timeline.slice(-300).map((e) => h('div', { key: e.id, style: css.ev },
-          h('span', { style: css.muted }, `${e.at.replace('T', ' ').slice(0, 16)} · ${e.actor} · ${e.type}`),
+        d.timeline.slice(-300).reverse().map((e) => h('div', { key: e.id, style: css.ev },
+          h('span', { style: css.muted }, `${e.at.replace('T', ' ').slice(0, 16)} · ${e.actor} · ${e.type}${e.reason ? ` · ${e.reason}` : ''}`),
           e.data?.text ? h('div', null, (typeof e.data.text === 'string' ? e.data.text : JSON.stringify(e.data.text)).slice(0, 4000)) : null)));
     }
 
