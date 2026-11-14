@@ -142,7 +142,7 @@ test('apply registers the tools, the routes and closes the ledger on dispose', a
     inject: (names, cb) => cb({ connection: { fetch: { register(r) { routes.push(r); return () => {}; } } }, effect: (fn) => effects.push(fn()) }),
   };
   plugin.apply(ctx, { dataDir: path.join(dir, 'l'), autodosData: path.join(dir, 'none.json') });
-  assert.deepEqual(registered, ['autodos_board', 'autodos_task', 'autodos_projects', 'autodos_create_project', 'autodos_create_task', 'autodos_reply', 'autodos_retry']);
+  assert.deepEqual(registered, ['autodos_board', 'autodos_task', 'autodos_projects', 'autodos_create_project', 'autodos_update_project', 'autodos_create_task', 'autodos_reply', 'autodos_retry']);
   assert.ok(!registered.some((n) => /permi|decide/.test(n)), 'no agent tool answers permission requests');
   assert.deepEqual(routes.map((r) => r.path), ['/api/autodos/board', '/api/autodos/task', '/api/autodos/projects', '/api/autodos/action']);
   assert.ok(routes.every((r) => r.requestBody === 'buffered'));

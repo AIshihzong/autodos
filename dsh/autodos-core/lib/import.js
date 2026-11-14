@@ -71,6 +71,7 @@ export const WAITING_TEXT = {
   retry: 'Reply or retry',
   result: 'Look at the result',
   permission: 'Allow or deny an action',
+  budget: 'Budget reached: add more or close',
 };
 
 /**

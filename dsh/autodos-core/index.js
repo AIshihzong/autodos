@@ -15,6 +15,7 @@ import { importAutodosFile, autodosDataFile } from './lib/import.js';
 import { board, boardText, taskDetail } from './lib/board.js';
 import { Autodos } from './lib/actions.js';
 import { createPaseo } from './lib/paseo.js';
+import { createGit, runCheck } from './lib/land.js';
 
 export const name = 'autodos-core';
 export const inject = ['tools'];
@@ -47,6 +48,14 @@ export function openLedger(config = {}, { log = () => {} } = {}) {
 
 const clean = (v) => JSON.parse(JSON.stringify(v ?? null));
 const str = { type: 'string' };
+const PROJECT_FIELDS = {
+  name: str,
+  path: { type: 'string', description: 'Absolute path of the git repository.' },
+  description: str,
+  check: { type: 'string', description: 'Shell command that must pass in the task worktree before merging, e.g. "npm test".' },
+  budgetUsd: { type: 'number', description: 'What one task may spend before it stops and asks (USD).' },
+  base: { type: 'string', description: 'Branch to merge into (default: the branch checked out when the task starts).' },
+};
 
 /** The tools the chief of staff (any DSH agent) can call. Exported for tests. Permission requests are not among them. */
 export function tools(ledger, autodos = new Autodos(ledger)) {
@@ -103,10 +112,19 @@ export function tools(ledger, autodos = new Autodos(ledger)) {
     {
       name: 'autodos_create_project',
       description: 'Add a project: a name and the absolute path of its git repository on this machine.',
-      parameters: { type: 'object', properties: { name: str, path: { type: 'string', description: 'Absolute path of the git repository.' }, description: str }, required: ['name', 'path'], additionalProperties: false },
+      parameters: { type: 'object', properties: PROJECT_FIELDS, required: ['name', 'path'], additionalProperties: false },
       output: { schema: OBJECT, render: (_args, value) => asText(value) },
       async execute(args = {}) {
         return clean(autodos.createProject(args, { actor: 'lead' }));
+      },
+    },
+    {
+      name: 'autodos_update_project',
+      description: 'Change a project: the check command run before merging (e.g. "npm test"), the budget per task in USD, the base branch, or the path.',
+      parameters: { type: 'object', properties: { project: { type: 'string', description: 'Project id or name.' }, ...PROJECT_FIELDS }, required: ['project'], additionalProperties: false },
+      output: { schema: OBJECT, render: (_args, value) => asText(value) },
+      async execute({ project, ...patch } = {}) {
+        return clean(autodos.updateProject(project, patch, { actor: 'lead' }));
       },
     },
     {
@@ -158,6 +176,7 @@ export function tools(ledger, autodos = new Autodos(ledger)) {
 export function routes(ledger, autodos = new Autodos(ledger)) {
   const act = {
     create_project: (b) => autodos.createProject(b),
+    update_project: ({ project, action: _a, ...patch }) => autodos.updateProject(project, patch),
     create_task: (b) => autodos.createTask(b),
     dispatch: (b) => autodos.dispatch(b.task),
     reply: (b) => autodos.reply(b.task, b.text).then((r) => r.task),
@@ -188,7 +207,7 @@ export function routes(ledger, autodos = new Autodos(ledger)) {
       path: '/api/autodos/projects',
       methods: ['GET'],
       async fetch() {
-        return json({ ok: true, projects: ledger.list('project').map((p) => ({ id: p.id, name: p.name, path: p.path || null })), execution: Boolean(autodos.paseo) });
+        return json({ ok: true, projects: ledger.list('project').map((p) => ({ id: p.id, name: p.name, path: p.path || null, check: p.check || null, budgetUsd: p.budgetUsd || null, base: p.base || null })), execution: Boolean(autodos.paseo), budgetUsd: autodos.budgetUsd });
       },
     },
     {
@@ -218,7 +237,7 @@ export function apply(ctx, config = {}) {
   const log = (...a) => console.log('[autodos-core]', ...a);
   const ledger = openLedger(config, { log });
   const paseo = config.paseo === false ? null : createPaseo(config.paseo || {});
-  const autodos = new Autodos(ledger, { paseo, provider: config.provider, mode: config.mode, log });
+  const autodos = new Autodos(ledger, { paseo, git: createGit(), check: runCheck, provider: config.provider, mode: config.mode, budgetUsd: config.budgetUsd, budgetStepUsd: config.budgetStepUsd, log });
   // Follow the running agents in the background, so the board moves without anyone asking.
   const every = Math.max(2000, Number(config.syncMs) || 5000);
   const timer = paseo ? setInterval(() => autodos.sync().catch((e) => log(`sync: ${e.message}`)), every) : null;

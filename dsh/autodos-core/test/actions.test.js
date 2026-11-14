@@ -214,3 +214,135 @@ test('only new output is recorded', () => {
   assert.equal(newText('a\nb', 'a\nb\nc'), 'c');
   assert.equal(newText('x', 'y'), 'y');
 });
+
+// ---- landing, with a real git repository ----
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createGit, runCheck } from '../lib/land.js';
+
+function repo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'autodos-land-'));
+  const g = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } }).trim();
+  g('init', '-q', '-b', 'main');
+  g('config', 'user.name', 't');
+  g('config', 'user.email', 't@x');
+  fs.writeFileSync(path.join(dir, 'README.md'), 'hi\n');
+  g('add', '.');
+  g('commit', '-qm', 'init');
+  return { dir, g };
+}
+
+/** What an agent would do in its worktree: a branch with one commit. */
+function agentCommits(r, branch, file, text) {
+  const wt = `${r.dir}-${branch.replace(/\W/g, '-')}`;
+  if (!fs.existsSync(wt)) r.g('worktree', 'add', '-q', '-b', branch, wt, 'main');
+  fs.writeFileSync(path.join(wt, file), text);
+  execFileSync('git', ['add', '.'], { cwd: wt });
+  execFileSync('git', ['commit', '-qm', `edit ${file}`], { cwd: wt });
+  return wt;
+}
+
+async function finished(a, l, paseo, task, wt) {
+  const thread = l.get('thread', l.get('task', task.id).threadId);
+  const ag = paseo.agents.get(thread.agentId);
+  ag.cwd = wt;
+  ag.status = 'idle';
+  await a.sync();
+  return a.openDecisions(task.id, 'result')[0];
+}
+
+test('accepting checks the work and merges it into the base branch', async () => {
+  const r = repo();
+  const l = new Ledger(':memory:');
+  const paseo = fakePaseo();
+  const a = new Autodos(l, { paseo, git: createGit(), check: runCheck });
+  a.createProject({ name: 'Demo', path: r.dir, check: 'test -f hello.sh' });
+  const t = await a.createTask({ title: 'Add hello', project: 'Demo' });
+  assert.equal(l.get('task', t.id).base, 'main');
+  assert.equal(paseo.calls[0][1].base, 'main');
+
+  // The first try forgets the file the check looks for: the check sends it back.
+  let wt = agentCommits(r, 'autodos/1', 'other.txt', 'x\n');
+  let d = await finished(a, l, paseo, t, wt);
+  assert.match(d.question, /merge autodos\/1 into main/);
+  await a.decide(d.id, 'Accept');
+  assert.equal(l.get('task', t.id).state, 'working');
+  assert.match(paseo.calls.at(-1)[1].text, /The check `test -f hello.sh` failed/);
+  assert.equal(l.timeline(t.id).filter((e) => e.type === 'task.check')[0].data.ok, false);
+
+  // Fixed: it merges into main, which is checked out and clean.
+  agentCommits(r, 'autodos/1', 'hello.sh', 'echo hello\n');
+  d = await finished(a, l, paseo, t, wt);
+  const done = await a.decide(d.id, 'Accept');
+  assert.equal(done.state, 'done');
+  assert.ok(fs.existsSync(path.join(r.dir, 'hello.sh')));
+  assert.equal(r.g('rev-parse', 'HEAD'), done.commit);
+  assert.match(r.g('log', '-1', '--format=%s'), /Merge #1: Add hello/);
+  assert.equal(paseo.calls.at(-1)[0], 'stop');
+  assert.equal(l.list('output', { where: (o) => o.taskId === t.id })[0].title, 'autodos/1 → main');
+});
+
+test('a dirty base or a conflict stops the merge and says why', async () => {
+  const r = repo();
+  const l = new Ledger(':memory:');
+  const paseo = fakePaseo();
+  const a = new Autodos(l, { paseo, git: createGit(), check: runCheck });
+  a.createProject({ name: 'Demo', path: r.dir });
+
+  const t = await a.createTask({ title: 'Edit readme', project: 'Demo' });
+  const wt = agentCommits(r, 'autodos/1', 'README.md', 'from the agent\n');
+  fs.writeFileSync(path.join(r.dir, 'README.md'), 'my own edit\n'); // the person is editing main
+  let d = await finished(a, l, paseo, t, wt);
+  let after = await a.decide(d.id, 'Accept');
+  assert.equal(after.state, 'stuck');
+  assert.match(after.stuck, /uncommitted changes[\s\S]*Commit or stash/);
+  assert.equal(fs.readFileSync(path.join(r.dir, 'README.md'), 'utf8'), 'my own edit\n', 'the person\'s work is untouched');
+
+  // The person commits their edit, which now conflicts with the agent's; retrying hands the conflict to the agent.
+  r.g('commit', '-qam', 'mine');
+  after = await a.retry(t.id);
+  assert.equal(after.state, 'working');
+  assert.match(paseo.calls.at(-1)[1].text, /conflicts[\s\S]*Merge main into your branch/);
+  assert.equal(r.g('status', '--porcelain'), '', 'the failed merge was aborted');
+  assert.equal(r.g('log', '-1', '--format=%s'), 'mine');
+});
+
+test('when the base is not checked out, the merge happens without touching a working tree', async () => {
+  const r = repo();
+  r.g('checkout', '-q', '-b', 'side');
+  const git = createGit();
+  agentCommits(r, 'autodos/9', 'a.txt', 'a\n');
+  const m = await git.merge({ repo: r.dir, branch: 'autodos/9', base: 'main', message: 'Merge #9' });
+  assert.equal(m.ok, true);
+  assert.equal(m.how, 'merged without a checkout');
+  assert.equal(r.g('rev-parse', 'main'), m.commit);
+  assert.equal(r.g('rev-parse', '--abbrev-ref', 'HEAD'), 'side');
+  assert.equal(r.g('show', 'main:a.txt'), 'a');
+  const again = await git.merge({ repo: r.dir, branch: 'autodos/9', base: 'main' });
+  assert.equal(again.reason, 'missing');
+});
+
+test('a task stops at its budget and asks before spending more', async () => {
+  const { l, paseo, a } = setup();
+  a.updateProject('Demo', { budgetUsd: 1 });
+  const t = await a.createTask({ title: 'Big refactor', project: 'Demo' });
+  const first = l.get('task', t.id).threadId;
+  paseo.agents.get(l.get('thread', first).agentId).usage = { CostUsd: 1.2 };
+  await a.sync();
+  const task = l.get('task', t.id);
+  assert.equal(task.state, 'waiting_you');
+  assert.equal(task.waitingKind, 'budget');
+  assert.match(task.waitingFor, /Spent \$1\.20 of \$1\.00/);
+  assert.equal(paseo.calls.at(-1)[0], 'stop');
+  assert.equal(l.get('thread', first).active, false);
+
+  const d = a.openDecisions(t.id, 'budget')[0];
+  const more = await a.decide(d.id, 'Add budget');
+  assert.equal(more.state, 'working');
+  assert.equal(more.budgetUsd, 6.2);
+  assert.notEqual(more.threadId, first);
+  assert.match(paseo.calls.at(-1)[1].prompt, /stopped at its budget/);
+  assert.deepEqual(a.budget(more), { limit: 6.2, spent: 1.2 });
+});

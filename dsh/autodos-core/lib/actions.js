@@ -14,15 +14,20 @@ const BROKEN = new Set(['error', 'failed', 'crashed', 'closed', 'exited', 'kille
 
 export const RESULT_OPTIONS = ['Accept', 'Keep working'];
 export const PERMISSION_OPTIONS = ['Allow', 'Deny'];
+export const BUDGET_OPTIONS = ['Add budget', 'Close'];
 
 export class Autodos {
   /**
    * @param {import('./store.js').Ledger} ledger
    * @param {{paseo?: ReturnType<import('./paseo.js').createPaseo>, provider?: string, mode?: string, log?: (m: string) => void}} opts
    */
-  constructor(ledger, { paseo = null, provider = 'claude', mode, log = () => {} } = {}) {
+  constructor(ledger, { paseo = null, git = null, check = null, provider = 'claude', mode, budgetUsd, budgetStepUsd, log = () => {} } = {}) {
     this.ledger = ledger;
     this.paseo = paseo;
+    this.git = git; // lib/land.js createGit(); without it an accepted task is marked done but not merged
+    this.check = check; // lib/land.js runCheck
+    this.budgetUsd = Number(budgetUsd) > 0 ? Number(budgetUsd) : Number(ledger.get('settings', 'autodos')?.budgetUsd) || 5;
+    this.budgetStepUsd = Number(budgetStepUsd) > 0 ? Number(budgetStepUsd) : this.budgetUsd;
     this.provider = provider;
     this.mode = mode;
     this.log = log;
@@ -56,11 +61,28 @@ export class Autodos {
 
   // ---- creating ----
 
-  createProject({ name, path, description }, { actor = 'you' } = {}) {
+  createProject({ name, path, description, check, budgetUsd, base }, { actor = 'you' } = {}) {
     if (!name) throw new Error('A project needs a name');
     if (!path) throw new Error('A project needs the path of its repository');
     if (this.ledger.list('project').some((p) => p.name?.toLowerCase() === String(name).toLowerCase())) throw new Error(`Project ${name} already exists`);
-    return this.ledger.create('project', { name, path, description: description || '', source: 'autodos-core' }, { actor, reason: 'new project' });
+    return this.ledger.create('project', { name, path, description: description || '', check: check || null, budgetUsd: Number(budgetUsd) > 0 ? Number(budgetUsd) : null, base: base || null, source: 'autodos-core' }, { actor, reason: 'new project' });
+  }
+
+  /** Change a project's check command, budget per task, base branch or path. */
+  updateProject(ref, patch = {}, { actor = 'you' } = {}) {
+    const p = this.project(ref);
+    const next = {};
+    for (const k of ['path', 'description', 'check', 'base']) if (k in patch) next[k] = patch[k] || null;
+    if ('budgetUsd' in patch) next.budgetUsd = Number(patch.budgetUsd) > 0 ? Number(patch.budgetUsd) : null;
+    return this.ledger.update('project', p.id, next, { actor, reason: 'project settings' });
+  }
+
+  /** What a task may spend, and what it has spent across all its runs. */
+  budget(task) {
+    const project = task.projectId ? this.ledger.get('project', task.projectId) : null;
+    const limit = Number(task.budgetUsd) || Number(project?.budgetUsd) || this.budgetUsd;
+    const spent = this.ledger.list('thread', { where: (t) => t.taskId === task.id }).reduce((sum, t) => sum + (Number(t.costUsd) || 0), 0);
+    return { limit, spent: Math.round(spent * 100) / 100 };
   }
 
   async createTask({ title, description = '', projectId, project, staffId = null, provider, start = true }, { actor = 'you', reason } = {}) {
@@ -85,18 +107,19 @@ export class Autodos {
     const project = this.project(task.projectId);
     if (!project.path) throw new Error(`Project ${project.name} has no repository path`);
     const branch = task.branch || `autodos/${task.number}`;
+    const base = task.base || project.base || (this.git ? await this.git.currentBranch(project.path) : null) || undefined;
     const prompt = taskPrompt(task, project, branch, extra);
-    const run = await this.paseo.dispatch({ cwd: project.path, prompt, provider: task.runtime || this.provider, branch, title: `#${task.number} ${task.title}`.slice(0, 80), mode: this.mode });
+    const run = await this.paseo.dispatch({ cwd: project.path, prompt, provider: task.runtime || this.provider, branch, base, title: `#${task.number} ${task.title}`.slice(0, 80), mode: this.mode });
     const l = this.ledger;
     return l.transaction(() => {
       const old = this.threadOf(task);
       if (old?.active) l.update('thread', old.id, { active: false, status: 'replaced' }, { actor: 'system', task: task.id, reason: 'dispatched again' });
       const thread = l.create(
         'thread',
-        { taskId: task.id, machine: 'local', runtime: run.provider || task.runtime || this.provider, agentId: run.agentId, sessionId: run.agentId, cwd: project.path, branch, prompt, status: run.status || 'running', active: true, source: 'paseo' },
+        { taskId: task.id, machine: 'local', runtime: run.provider || task.runtime || this.provider, agentId: run.agentId, sessionId: run.agentId, cwd: project.path, branch, base: base || null, prompt, status: run.status || 'running', active: true, source: 'paseo' },
         { actor, task: task.id, reason: 'dispatched to Paseo' },
       );
-      return l.update('task', task.id, { state: 'working', threadId: thread.id, branch, machine: 'local', stuck: null, waitingFor: null, waitingKind: null, lastProgressAt: new Date().toISOString() }, { actor, reason: `started ${thread.runtime} on ${branch}` });
+      return l.update('task', task.id, { state: 'working', threadId: thread.id, branch, base: base || null, machine: 'local', landPending: null, stuck: null, waitingFor: null, waitingKind: null, lastProgressAt: new Date().toISOString() }, { actor, reason: `started ${thread.runtime} on ${branch}` });
     });
   }
 
@@ -120,6 +143,7 @@ export class Autodos {
   /** Try again: nudge the agent if it is still there, else start a fresh one on the same branch. */
   async retry(ref, { actor = 'you', note } = {}) {
     const task = this.task(ref);
+    if (task.landPending) return this.land(task.id, { actor });
     const thread = this.threadOf(task);
     const why = task.stuck ? `It stopped with: ${task.stuck.split('\n')[0].slice(0, 300)}` : '';
     if (thread?.active && this.paseo && !BROKEN.has(thread.status)) {
@@ -154,26 +178,78 @@ export class Autodos {
 
     if (d.kind === 'result') {
       if (picked === RESULT_OPTIONS[0]) {
-        const thread = this.threadOf(task);
-        l.transaction(() => {
-          close('accepted');
-          if (task.branch && !l.list('output', { where: (o) => o.taskId === task.id && o.type === 'change' && o.ref === task.branch }).length) {
-            l.create('output', { taskId: task.id, projectId: task.projectId, type: 'change', title: task.branch, ref: task.branch, seen: true }, { actor, task: task.id, reason: 'accepted' });
-          }
-          if (thread?.active) l.update('thread', thread.id, { active: false }, { actor, task: task.id, reason: 'accepted' });
-          l.update('task', task.id, { state: 'done', waitingFor: null, waitingKind: null, lastProgressAt: new Date().toISOString() }, { actor, reason: 'accepted' });
-        });
-        return l.get('task', task.id);
+        close('accepted');
+        return this.land(task.id, { actor });
       }
       if (!note) throw new Error('Say what to change');
       close('sent back');
       return (await this.reply(task.id, note, { actor })).task;
     }
 
+    if (d.kind === 'budget') {
+      close(picked === BUDGET_OPTIONS[0] ? 'more budget' : 'closed');
+      if (picked !== BUDGET_OPTIONS[0]) return this.drop(task.id, { actor, reason: 'stopped at the budget' });
+      const { spent } = this.budget(task);
+      l.update('task', task.id, { budgetUsd: Math.round((spent + this.budgetStepUsd) * 100) / 100 }, { actor, reason: 'more budget' });
+      return this.dispatch(task.id, { actor, extra: [note, 'An earlier run stopped at its budget. Your earlier commits are on this branch: continue from there.'].filter(Boolean).join('\n') });
+    }
+
     // An imported or free-form decision: record the answer; the task moves on when someone acts on it.
     close('decided');
     if (note && task) l.record('thread.message', { text: note }, { actor, task: task.id });
     return task ? l.get('task', task.id) : null;
+  }
+
+  // ---- landing ----
+
+  /** Check the task's work, then merge its branch into the base. Anything that stops it says why. */
+  async land(ref, { actor = 'you' } = {}) {
+    const l = this.ledger;
+    const task = this.task(ref);
+    const project = task.projectId ? this.project(task.projectId) : null;
+    const thread = this.threadOf(task);
+    const branch = task.branch;
+    const now = () => new Date().toISOString();
+    l.update('task', task.id, { state: 'landing', waitingFor: null, waitingKind: null, stuck: null, landPending: null, lastProgressAt: now() }, { actor, reason: 'landing' });
+    const sendBack = async (text, reason) => {
+      if (thread?.active && this.paseo) {
+        l.record('task.landing', { ok: false, reason, text }, { actor: 'system', task: task.id });
+        return (await this.reply(task.id, text, { actor: 'system' })).task;
+      }
+      return l.update('task', task.id, { state: 'stuck', stuck: text, landPending: true }, { actor: 'system', reason });
+    };
+
+    if (project?.check && this.check) {
+      const cwd = thread?.worktree || thread?.cwd;
+      const r = await this.check({ cwd, command: project.check });
+      l.record('task.check', { ok: r.ok, command: project.check, text: r.output.slice(-3000), cwd }, { actor: 'system', task: task.id });
+      if (!r.ok) return sendBack(`The check \`${project.check}\` failed in ${cwd}:\n${r.output.slice(-2500)}\n\nFix it, run the check again, and commit.`, 'check failed');
+    }
+
+    if (!this.git || !project || !branch) {
+      return this.#landed(task, thread, { actor, commit: null, how: 'not merged (no repository to merge into)' });
+    }
+    const base = task.base || thread?.base || project.base || (await this.git.currentBranch(project.path));
+    if (!base) return sendBack('Could not tell which branch to merge into.', 'no base');
+    const m = await this.git.merge({ repo: project.path, branch, base, message: `Merge #${task.number}: ${task.title}` });
+    if (m.ok) return this.#landed(task, thread, { actor, commit: m.commit, how: m.how, base });
+    if (m.reason === 'conflict') return sendBack(`Merging ${branch} into ${base} conflicts:\n${m.detail}\n\nMerge ${base} into your branch, resolve the conflicts, run the tests, and commit.`, 'merge conflict');
+    if (m.reason === 'missing' && thread?.active) return sendBack(`There is nothing to merge: ${m.detail}. Commit your work on ${branch}.`, 'nothing to merge');
+    return l.update('task', task.id, { state: 'stuck', stuck: m.reason === 'dirty' ? `Not merged: ${m.detail}\nCommit or stash those changes, then retry.` : `Not merged: ${m.detail}`, landPending: true }, { actor: 'system', reason: `merge ${m.reason}` });
+  }
+
+  async #landed(task, thread, { actor, commit, how, base }) {
+    const l = this.ledger;
+    if (thread?.active && this.paseo) await this.paseo.stop({ agentId: thread.agentId }).catch((e) => this.log(`stop ${thread.agentId}: ${e.message}`));
+    l.transaction(() => {
+      if (task.branch && !l.list('output', { where: (o) => o.taskId === task.id && o.type === 'change' && o.ref === task.branch }).length) {
+        l.create('output', { taskId: task.id, projectId: task.projectId, type: 'change', title: base ? `${task.branch} → ${base}` : task.branch, ref: task.branch, commit, seen: true }, { actor, task: task.id, reason: 'landed' });
+      }
+      if (thread?.active) l.update('thread', thread.id, { active: false, status: 'done' }, { actor: 'system', task: task.id, reason: 'landed' });
+      l.record('task.landing', { ok: true, commit, how, base: base || null }, { actor: 'system', task: task.id });
+      l.update('task', task.id, { state: 'done', landedAt: new Date().toISOString(), commit, lastProgressAt: new Date().toISOString() }, { actor, reason: commit ? `merged into ${base}` : how });
+    });
+    return l.get('task', task.id);
   }
 
   /** Drop a task: stop its agent and close it. */
@@ -259,7 +335,7 @@ export class Autodos {
       }
       if (IDLE.has(st.status) && (t.state === 'working' || t.waitingKind === 'permission')) {
         if (!this.openDecisions(task.id, 'result').length) {
-          l.create('decision', { taskId: task.id, threadId: thread.id, kind: 'result', question: 'The agent finished its turn. Accept the result, or say what to change.', options: RESULT_OPTIONS, reversible: true, open: true, decidedBy: null }, { ...meta, reason: 'turn finished' });
+          l.create('decision', { taskId: task.id, threadId: thread.id, kind: 'result', question: `The agent finished its turn. Accept to ${t.base || thread.base ? `merge ${t.branch || 'the branch'} into ${t.base || thread.base}` : 'finish it'}, or say what to change.`, options: RESULT_OPTIONS, reversible: true, open: true, decidedBy: null }, { ...meta, reason: 'turn finished' });
         }
         l.update('task', task.id, { state: 'waiting_you', waitingKind: 'result', waitingFor: null, lastProgressAt: now }, { ...meta, reason: 'turn finished' });
         return;
@@ -270,7 +346,26 @@ export class Autodos {
         l.update('task', task.id, { lastProgressAt: now }, meta);
       }
     });
+    await this.#checkBudget(task.id, thread.id);
     return { thread: thread.id, status: st.status };
+  }
+
+  /** Over budget: stop the agent and ask the person whether to spend more. */
+  async #checkBudget(taskId, threadId) {
+    const l = this.ledger;
+    const task = l.get('task', taskId);
+    const thread = l.get('thread', threadId);
+    if (!task || !thread?.active) return;
+    const { limit, spent } = this.budget(task);
+    if (spent < limit) return;
+    await this.paseo.stop({ agentId: thread.agentId }).catch((e) => this.log(`stop ${thread.agentId}: ${e.message}`));
+    l.transaction(() => {
+      l.update('thread', thread.id, { active: false, status: 'stopped' }, { actor: 'system', task: task.id, reason: 'budget reached' });
+      for (const d of this.openDecisions(task.id)) l.update('decision', d.id, { open: false, choice: 'budget', decidedBy: 'system' }, { actor: 'system', task: task.id, reason: 'budget reached' });
+      const question = `Spent $${spent.toFixed(2)} of $${limit.toFixed(2)}. Add $${this.budgetStepUsd.toFixed(2)} and continue, or close the task?`;
+      l.create('decision', { taskId: task.id, threadId: thread.id, kind: 'budget', question, options: BUDGET_OPTIONS, reversible: true, open: true, decidedBy: null }, { actor: 'system', task: task.id, reason: 'budget reached' });
+      l.update('task', task.id, { state: 'waiting_you', waitingKind: 'budget', waitingFor: question }, { actor: 'system', reason: 'budget reached' });
+    });
   }
 }
 

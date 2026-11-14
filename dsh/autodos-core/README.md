@@ -9,7 +9,10 @@ Autodos as a DeepSeek Harness (DSH) plugin, step 1: the event ledger, the eight 
 - **Import** (`lib/import.js`): on first open, reads `~/.autodos/db.json`, or `~/.crewboard/db.json` from before the rename (read-only, never written), and imports projects, agents, workers, requirements, todos with their messages, PRs and evidence, chief-of-staff chat and rules. Runs once per ledger.
 - **Not imported yet**: topics and run history. They come with step 3, when the runner moves in.
 - **Status board** (`lib/board.js`): open tasks (failed ones included, since they wait for a reply or retry) sorted by what waits on you first, each with who (staff and machine), state, what it waits for or where it is stuck, last progress and outputs.
-- **DSH entry** (`index.js`): tools `autodos_board` and `autodos_task` for the lead agent, and HTTP routes `GET /api/autodos/board` and `GET /api/autodos/task?id=`.
+- **Running tasks** (`lib/actions.js`, `lib/paseo.js`): a task is dispatched through Paseo, which starts Claude Code (or Codex) in its own worktree on branch `autodos/<number>`. A background sync (every 5 s) puts the agent's output in the timeline. A permission request becomes an open decision that only the person answers, from the panel. A finished turn asks you to accept the result or say what to change.
+- **Landing** (`lib/land.js`): accepting runs the project's `check` command (if set) in the task worktree; a failure goes back to the agent. Then the branch is merged (`--no-ff`) into its base. The merge never touches a checkout with uncommitted changes, and a conflict goes back to the agent to resolve; neither is forced. Nothing is pushed.
+- **Budget**: each task may spend `budgetUsd` (task, else project, else the plugin config, else the imported Autodos setting, else $5). At the limit the agent is stopped and you choose: add budget and continue on the same branch, or close the task.
+- **DSH entry** (`index.js`): tools for the chief of staff (`autodos_board`, `autodos_task`, `autodos_projects`, `autodos_create_project`, `autodos_update_project`, `autodos_create_task`, `autodos_reply`, `autodos_retry`; none of them can answer a permission request), and HTTP routes `GET /api/autodos/board`, `GET /api/autodos/task?id=`, `GET /api/autodos/projects` and `POST /api/autodos/action` for the panel.
 - **Panel** (`lib/client.js`): a "任务 / Tasks" item in the DSH sidebar with the board and a task detail view (threads, outputs, decisions, timeline).
 
 ## Try the import without DSH
@@ -41,6 +44,10 @@ Config (all optional):
 | `dataDir` | `$AUTODOS_DSH_HOME`, else `<DSH_HOME or ~/.dsh>/plugins/autodos` | where `autodos.db` lives |
 | `autodosData` | `$AUTODOS_DATA`/`db.json`, else `~/.autodos/db.json`, else `~/.crewboard/db.json` | the old board to import |
 | `importAutodos` | `true` | set `false` to start empty |
+| `paseo` | `{}` | `{bin, host}` for the Paseo CLI, or `false` for read only |
+| `provider` | `claude` | the agent new tasks use |
+| `budgetUsd` / `budgetStepUsd` | imported setting, else 5 | default budget per task / how much "add budget" adds |
+| `syncMs` | `5000` | how often running agents are checked |
 
 ## Tests
 
