@@ -16,7 +16,8 @@ import { detectRuntimes } from './runtimes.js';
 import { diagnose, fix as fixCheck, fixJobs } from './doctor.js';
 import { FeishuLink } from './feishu.js';
 import { isGitRepo, git } from './git.js';
-import { detectChecks } from './quality.js';
+import { detectChecks, setMemoryExtra } from './quality.js';
+import { Staff, LOCAL } from './profile.js';
 import { Rules, hashKey, newKey, fromGitHub, verifyGitHub, nextRun } from './rules.js';
 import { attachChannels, send, checkUrl, CHANNEL_KINDS } from './channels.js';
 import { Workers } from './workers.js';
@@ -78,6 +79,10 @@ export function createApp({ dataDir } = {}) {
   runner.on('phase', (t) => ['done', 'closed', 'merging', 'shipping'].includes(t.phase) && previews.stop(t.id));
   runner.workers = workers;
   const autopilot = new Autopilot(store, runner, rules, newTodo);
+  // The person's staff: their agents on every machine, and what Autodos learned about the person from them.
+  const staff = new Staff(store, { home: process.env.AUTODOS_STAFF_HOME || undefined });
+  setMemoryExtra((project) => staff.block(project));
+  if (process.env.AUTODOS_STAFF_SCAN !== '0') staff.start();
   attachChannels(store, runner);
 
   const snapshot = () => {
@@ -94,6 +99,7 @@ export function createApp({ dataDir } = {}) {
       chiefBusy: chief.busy,
       feishu: feishu.view(),
       workers: workers.list(),
+      staff: staff.view(),
       pairings: workers.pairingsView(),
       previews: previews.list(),
       rules: d.rules,
@@ -148,6 +154,27 @@ export function createApp({ dataDir } = {}) {
     const [res, rid, sub] = seg;
 
     if (method === 'GET' && res === 'state') return snapshot();
+    if (res === 'staff') {
+      if (method === 'GET' && !rid) return staff.view();
+      if (method === 'POST' && rid === 'consent') {
+        try {
+          return staff.setConsent(String(body.machine || ''), String(body.kind || ''), !!body.allow);
+        } catch (e) {
+          throw new HttpError(400, e.message);
+        }
+      }
+      if (method === 'POST' && rid === 'scan') return staff.rescan(body.machine ? String(body.machine) : null);
+    }
+    if (res === 'profile') {
+      try {
+        if (method === 'GET' && !rid) return { notes: staff.notes() };
+        if (method === 'POST' && !rid) return staff.addOwn(body);
+        if (method === 'PATCH' && rid) return staff.edit(rid, body);
+        if (method === 'DELETE' && rid) return staff.edit(rid, { status: 'removed' });
+      } catch (e) {
+        throw new HttpError(/No such/.test(e.message) ? 404 : 400, e.message);
+      }
+    }
     if (method === 'GET' && res === 'runtimes') return detectRuntimes(true);
     if (res === 'feishu') {
       if (method === 'POST' && rid === 'bind') return feishu.bind();
@@ -632,6 +659,8 @@ export function createApp({ dataDir } = {}) {
     } catch {
       return reply(400, { error: 'Body must be JSON' });
     }
+    if (url.pathname === '/workers/staff/config') return reply(200, staff.config(w));
+    if (url.pathname === '/workers/staff/report') return reply(200, staff.ingest(w.id, body));
     const m = url.pathname.match(/^\/workers\/(poll|jobs\/([\w-]+)\/(progress|done))$/);
     if (!m) return reply(404, { error: 'Not found' });
     if (m[1] === 'poll') {
@@ -732,7 +761,7 @@ export function createApp({ dataDir } = {}) {
     awake.close();
     store.flush();
   });
-  return { server, store, runner, chief, lead, watch, update, awake, feishu, delivery, previews, workers, rules, autopilot };
+  return { server, store, runner, chief, lead, watch, update, awake, feishu, delivery, previews, workers, rules, autopilot, staff };
 }
 
 export function startServer({ port = Number(process.env.PORT) || 4747, host = '127.0.0.1', dataDir } = {}) {

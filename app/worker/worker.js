@@ -15,6 +15,7 @@ import { runtimes, resolveRuntime, detectRuntimes } from '../server/runtimes.js'
 import { git, commitAll, validBranch } from '../server/git.js';
 import { runCheck } from '../server/quality.js';
 import { diagnose } from '../server/doctor.js';
+import { scanMachine } from '../server/staff.js';
 
 // This machine's environment check, sent with every poll and refreshed every 10 minutes.
 let doctor = null;
@@ -35,7 +36,7 @@ const SHARED = new Set(['main', 'master', 'head', 'develop', 'trunk', 'productio
 // One folder per exact repository URL: a hash keeps similar-looking URLs apart.
 const repoKey = (url) => `${safe(url.split('/').slice(-1)[0] || 'repo')}-${crypto.createHash('sha256').update(url).digest('hex').slice(0, 16)}`;
 
-export async function runWorker({ hub, key, dir = workerDir(), capacity = 2, signal, log = console.log } = {}) {
+export async function runWorker({ hub, key, dir = workerDir(), capacity = 2, signal, log = console.log, staffHome, staffEvery = 30 * 60_000, staffCheck = 2 * 60_000 } = {}) {
   hub = hub.replace(/\/$/, '');
   const running = new Map(); // jobId -> AbortController
   const call = async (p, body, timeoutMs = 35_000) => {
@@ -152,6 +153,45 @@ export async function runWorker({ hub, key, dir = workerDir(), capacity = 2, sig
       running.delete(job.id);
     }
   }
+
+  // The person's staff on this machine: which agents are here, and notes distilled from the conversations the
+  // person allowed to be read. The conversations themselves never leave this machine.
+  let lastScan = 0;
+  let scanning = false;
+  const statePath = path.join(dir, 'staff-state.json');
+  async function staffTick() {
+    if (scanning || signal?.aborted) return;
+    scanning = true;
+    try {
+      const cfg = await call('/workers/staff/config', {});
+      if (!cfg.rescan && Date.now() - lastScan < staffEvery) return;
+      lastScan = Date.now();
+      let state = {};
+      try {
+        state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      } catch {}
+      const rt = resolveRuntime('auto');
+      const scratch = path.join(dir, 'staff');
+      const distill =
+        cfg.distill && rt !== 'demo' && runtimes[rt]
+          ? async (prompt) => (fs.mkdirSync(scratch, { recursive: true }), (await runtimes[rt].run({ prompt, kind: 'chief', cwd: scratch, settings: {} })).text)
+          : null;
+      const out = await scanMachine({ home: staffHome, allow: Array.isArray(cfg.allow) ? cfg.allow : [], state, distill, exclude: [dir], log });
+      await call('/workers/staff/report', { staff: out.staff, notes: out.notes, remaining: out.remaining });
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(statePath, JSON.stringify(out.state));
+      // More history left to work through: come back soon instead of in half an hour.
+      if (out.remaining) lastScan = Date.now() - staffEvery + 2 * 60_000;
+    } catch (e) {
+      if (!signal?.aborted) log(`Staff check failed: ${e.message}`);
+    } finally {
+      scanning = false;
+    }
+  }
+  const staffTimer = setInterval(staffTick, staffCheck);
+  staffTimer.unref?.();
+  signal?.addEventListener('abort', () => clearInterval(staffTimer), { once: true });
+  setTimeout(staffTick, 3000).unref?.();
 
   log(`Autodos worker connected to ${hub} (up to ${capacity} at once)`);
   let backoff = 1000;

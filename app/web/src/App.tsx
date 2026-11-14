@@ -8,6 +8,7 @@ import { ProjectsPage, SchedulesPage, UsagePage } from './pages';
 import { SettingsPage, TeamPage } from './team-settings';
 import { Page, Palette } from './Palette';
 import { TodoDrawer } from './TodoDrawer';
+import { AboutYouPage, StaffPage } from './staff';
 import { ago } from './api';
 
 function usePref<T extends string>(key: string, initial: T): [T, (v: T) => void] {
@@ -32,6 +33,8 @@ const RAIL: { key: Page; icon: string; label: keyof Dict }[] = [
   { key: 'inbox', icon: 'inbox', label: 'inbox' },
   { key: 'workspace', icon: 'work', label: 'work' },
   { key: 'agents', icon: 'agents', label: 'team' },
+  { key: 'staff', icon: 'globe', label: 'staff' },
+  { key: 'you', icon: 'spark', label: 'you' },
   { key: 'chat', icon: 'chat', label: 'chat' },
   { key: 'schedules', icon: 'bolt', label: 'autoNav' },
 ];
@@ -212,7 +215,7 @@ export function App() {
         return;
       }
       const p = h.match(/^#\/(\w+)/)?.[1] as Page | undefined;
-      if (p && ['inbox', 'workspace', 'chat', 'agents', 'projects', 'schedules', 'usage', 'settings'].includes(p)) {
+      if (p && ['inbox', 'workspace', 'chat', 'agents', 'staff', 'you', 'projects', 'schedules', 'usage', 'settings'].includes(p)) {
         setPageState(p);
         setOpen(null);
       }
@@ -324,6 +327,8 @@ export function App() {
             </div>
           )}
           {page === 'agents' && <TeamPage state={state} />}
+          {page === 'staff' && <StaffPage state={state} />}
+          {page === 'you' && <AboutYouPage state={state} />}
           {page === 'projects' && <ProjectsPage state={state} />}
           {page === 'schedules' && <SchedulesPage state={state} />}
           {page === 'usage' && <UsagePage state={state} />}
