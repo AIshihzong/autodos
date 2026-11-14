@@ -102,6 +102,7 @@ window.__ModuleLoader__.load({
     };
     // The task's own words when it has them, else the translated kind ("Review the change").
     const needs = (t, r) => {
+      if (typeof r.waitingFor !== 'string') r = { ...r, waitingFor: null };
       if (!r.waitingFor && !r.waitingKind) return '';
       const label = r.waitingKind ? t(`w_${r.waitingKind}`) : '';
       return r.waitingFor && r.waitingFor !== DICT.en[`w_${r.waitingKind}`] ? r.waitingFor : label || r.waitingFor;
@@ -178,7 +179,7 @@ window.__ModuleLoader__.load({
         h('h3', null, `${t('timeline')} (${d.timeline.length})`),
         d.timeline.slice(-300).map((e) => h('div', { key: e.id, style: css.ev },
           h('span', { style: css.muted }, `${e.at.replace('T', ' ').slice(0, 16)} · ${e.actor} · ${e.type}`),
-          e.data?.text ? h('div', null, String(e.data.text).slice(0, 4000)) : null)));
+          e.data?.text ? h('div', null, (typeof e.data.text === 'string' ? e.data.text : JSON.stringify(e.data.text)).slice(0, 4000)) : null)));
     }
 
     function TasksPage({ t }) {

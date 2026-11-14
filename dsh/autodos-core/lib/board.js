@@ -48,6 +48,7 @@ export function board(ledger, { open = true, projectId, goalId, limit = 200 } = 
   if (projectId) tasks = tasks.filter((t) => t.projectId === projectId);
   if (goalId) tasks = tasks.filter((t) => t.goalId === goalId);
 
+  const str = (v) => (typeof v === 'string' && v ? v : null);
   const rows = tasks.map((t) => {
     const s = t.staffId ? staff.get(t.staffId) : null;
     const m = t.machine ? machines.get(t.machine) : null;
@@ -61,8 +62,8 @@ export function board(ledger, { open = true, projectId, goalId, limit = 200 } = 
       project: p ? { id: p.id, name: p.name } : null,
       who: { staff: s ? s.name : null, staffId: t.staffId || null, machine: m ? m.name : t.machine || null, runtime: t.runtime || s?.runtime || null },
       state: t.state,
-      stuck: t.stuck || null,
-      waitingFor: t.state === 'waiting_you' ? t.waitingFor || decisions.get(t.id)?.question || 'Needs you' : t.state === 'failed' ? t.waitingFor || 'Reply or retry' : null,
+      stuck: str(t.stuck),
+      waitingFor: t.state === 'waiting_you' ? str(t.waitingFor) || str(decisions.get(t.id)?.question) || 'Needs you' : t.state === 'failed' ? str(t.waitingFor) || 'Reply or retry' : null,
       waitingKind: t.state === 'waiting_you' || t.state === 'failed' ? t.waitingKind || null : null,
       decision: decisions.get(t.id) || null,
       lastProgressAt: t.lastProgressAt || t.updatedAt,

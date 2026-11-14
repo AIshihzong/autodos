@@ -49,12 +49,15 @@ export function waitingFor(t) {
   return w ? w.note || WAITING_TEXT[w.kind] : null;
 }
 
+/** Autodos stores some asks as objects ({text, options, ...}); keep only the words. */
+const askText = (a) => (a && typeof a === 'object' ? (typeof a.text === 'string' ? a.text : null) : typeof a === 'string' && a ? a : null);
+
 /** Why a task waits on the person: a kind (for translated labels) and the task's own words, if any. */
 export function waiting(t) {
   if (t.phase === 'confirm') return { kind: t.plan ? 'confirm_plan' : 'confirm_start', note: null };
-  if (t.phase === 'asking') return { kind: 'answer', note: t.question || t.leadAsk || null };
-  if (t.phase === 'review') return { kind: 'review', note: t.gateReason || null };
-  if (t.leadHold || t.leadPending) return { kind: 'lead_hold', note: t.leadAsk || t.question || null };
+  if (t.phase === 'asking') return { kind: 'answer', note: askText(t.question) || askText(t.leadAsk) };
+  if (t.phase === 'review') return { kind: 'review', note: askText(t.gateReason) };
+  if (t.leadHold || t.leadPending) return { kind: 'lead_hold', note: askText(t.leadAsk) || askText(t.question) };
   if (t.phase === 'failed') return { kind: 'retry', note: null };
   return null;
 }
@@ -161,7 +164,8 @@ export function importAutodos(ledger, data, { source = 'db.json' } = {}) {
         ledger.create('decision', {
           taskId: t.id,
           question: task.waitingFor,
-          options: t.phase === 'confirm' ? ['Go ahead', 'Change the plan'] : t.phase === 'review' ? ['Accept', 'Send back'] : [],
+          options: t.phase === 'confirm' ? ['Go ahead', 'Change the plan'] : t.phase === 'review' ? ['Accept', 'Send back']
+            : Array.isArray(t.leadAsk?.options) ? t.leadAsk.options.map((o) => (typeof o === 'string' ? o : o?.label || o?.text || JSON.stringify(o))) : [],
           reversible: t.phase !== 'review',
           open: true,
           decidedBy: null,

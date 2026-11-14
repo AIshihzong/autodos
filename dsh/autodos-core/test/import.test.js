@@ -29,7 +29,7 @@ function fixture() {
       { id: 't4', number: 104, title: 'Old spike', projectId: 'p_art', phase: 'done', branch: 'autodos/104', mergeLanded: true, evidence: [{ kind: 'image', file: 'shot.png' }], createdAt: at(1), updatedAt: at(2) },
       { id: 't5', number: 105, title: 'Flaky build', projectId: 'p_art', phase: 'queued', error: 'npm test failed\nat line 3', createdAt: at(1), updatedAt: at(4) },
       { id: 't6', number: 106, title: 'Dropped', phase: 'closed', createdAt: at(1), updatedAt: at(1) },
-      { id: 't7', number: 107, title: 'Out of budget', projectId: 'p_art', phase: 'failed', error: 'budget exhausted', createdAt: at(1), updatedAt: at(3) },
+      { id: 't7', number: 107, title: 'Out of budget', projectId: 'p_art', phase: 'failed', error: 'budget exhausted', leadHold: true, leadAsk: { text: 'Raise the budget or retry?', options: ['raise', 'retry'], recommend: 0 }, createdAt: at(1), updatedAt: at(3) },
     ],
     chief: [{ id: 'c1', role: 'user', text: 'Ship the gallery this week', at: at(1) }, { id: 'c2', role: 'assistant', text: 'Filed #101', at: at(2) }],
     rules: [{ id: 'ru1', name: 'nightly', cron: '0 3 * * *' }],
@@ -72,8 +72,8 @@ test('the board puts what waits on you first and says who, where and why', () =>
   assert.deepEqual(b.rows.map((r) => r.number), [103, 102, 105, 107, 101]);
   assert.deepEqual(b.byState, { waiting_you: 2, stuck: 1, failed: 1, working: 1 });
   const [review, ask, stuck, failed, working] = b.rows;
-  assert.equal(failed.waitingFor, 'Reply or retry');
-  assert.equal(failed.waitingKind, 'retry');
+  assert.equal(failed.waitingFor, 'Raise the budget or retry?');
+  assert.equal(failed.waitingKind, 'lead_hold');
   assert.equal(failed.stuck, 'budget exhausted');
   assert.equal(review.waitingKind, 'review');
   assert.equal(review.waitingFor, 'Changes the database');
@@ -88,7 +88,7 @@ test('the board puts what waits on you first and says who, where and why', () =>
   const text = boardText(b);
   assert.match(text, /WAITING ON YOU\] #103 Upload API/);
   assert.match(text, /needs: Monthly or yearly first\?/);
-  assert.match(text, /\[FAILED\] #107 Out of budget .* — needs: Reply or retry — stuck: budget exhausted/);
+  assert.match(text, /\[FAILED\] #107 Out of budget .* — needs: Raise the budget or retry\? — stuck: budget exhausted/);
 });
 
 test('the plugin imports on first open, then serves tools and routes', async () => {
