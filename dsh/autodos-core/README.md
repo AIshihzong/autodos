@@ -30,7 +30,7 @@ dsh plugin --profile web add ./dsh/autodos-core
 dsh --profile web
 ```
 
-The plugin has to be installed first: `dsh --patch` alone fails with `Cannot find package 'dsh-autodos-core'`. After installing, `--patch` can be used to pass config.
+The plugin has to be installed first: `dsh --patch` alone fails with `Cannot find package 'dsh-autodos-core'`.
 
 The HTTP routes sit behind the DSH login, so `curl` without the session cookie gets 401.
 
