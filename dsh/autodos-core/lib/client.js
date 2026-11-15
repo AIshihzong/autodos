@@ -89,6 +89,7 @@ window.__ModuleLoader__.load({
         drop_confirm: '确定关闭？',
         note_ph: '要改什么（选“继续改”时必填）',
         o_Allow: '允许',
+        allow_tool: '允许使用 {0}？',
         o_Deny: '拒绝',
         o_Accept: '通过并合并',
         'o_Keep working': '继续改',
@@ -179,6 +180,7 @@ window.__ModuleLoader__.load({
         drop_confirm: 'Close it?',
         note_ph: 'What to change (needed for “Keep working”)',
         o_Allow: 'Allow',
+        allow_tool: 'Allow {0}?',
         o_Deny: 'Deny',
         o_Accept: 'Accept and merge',
         'o_Keep working': 'Keep working',
@@ -292,6 +294,7 @@ window.__ModuleLoader__.load({
 .ad-card-title span{min-width:0;overflow-wrap:anywhere}
 .ad-meta{display:flex;flex-wrap:wrap;gap:4px 8px;font-size:11px;color:var(--ad-ink-3);align-items:center}
 .ad-meta .sep{color:var(--ad-ink-4)}
+.ad-meta>span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ad-need{font-size:12px;color:var(--ad-ink-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .ad-need b{color:var(--tone,var(--ad-ink));font-weight:600}
 .ad-stuck{font-size:11.5px;color:var(--ad-red);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
@@ -459,6 +462,7 @@ window.__ModuleLoader__.load({
 
     const Dot = ({ state }) => h('span', { className: `ad-dot${state === 'working' || state === 'landing' ? ' live' : ''}`, style: { '--tone': TONE[state] } });
     const Tag = ({ t, state }) => h('span', { className: 'ad-tag', style: { '--tone': TONE[state] } }, h(Dot, { state }), t(`s_${state}`));
+    const host = (m) => (m ? String(m).replace(/\.local$/, '') : m);
     const num = (r) => (r.number != null ? `#${r.number}` : '');
 
     const Icon = {
@@ -471,7 +475,7 @@ window.__ModuleLoader__.load({
 
     function Card({ t, r, onOpen, selected }) {
       const { label, note } = needs(t, r);
-      const who = [r.who.staff, r.who.machine].filter(Boolean).join(' · ');
+      const who = [r.who.staff, host(r.who.machine)].filter(Boolean).join(' · ');
       return h('button', { className: `ad-card${selected ? ' sel' : ''}`, onClick: () => onOpen(r.id), style: { '--tone': TONE[r.state] } },
         h('div', { className: 'ad-card-title' }, h(Dot, { state: r.state }), h('span', null, r.title)),
         h('div', { className: 'ad-meta' },
@@ -498,7 +502,7 @@ window.__ModuleLoader__.load({
     function Inbox({ t, rows, onOpen, selected }) {
       const list = rows.filter((r) => INBOX.has(r.state));
       if (!list.length) return h('div', { className: 'ad-empty' }, t('empty_inbox'));
-      return h('div', { style: { display: 'grid', gap: 8, maxWidth: 860 } }, list.map((r) => h(Card, { key: r.id, t, r, onOpen, selected: selected === r.id })));
+      return h('div', { style: { display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fill,minmax(340px,1fr))', alignItems: 'start' } }, list.map((r) => h(Card, { key: r.id, t, r, onOpen, selected: selected === r.id })));
     }
 
     function List({ t, rows, onOpen }) {
@@ -557,7 +561,7 @@ window.__ModuleLoader__.load({
             COLUMNS.filter((c) => !c.finished).map((c) => h('span', { key: c.key }, h('span', { className: 'ad-dot', style: { '--tone': c.tone } }), `${count(c.states)} ${t(c.key)}`))) : null,
           h('span', { className: 'ad-grow' }),
           h('input', { className: 'ad-input ad-search', placeholder: t('search'), value: query, onChange: (e) => setQuery(e.target.value) }),
-          h('button', { className: 'ad-btn icon ghost', title: t('refresh'), onClick: load }, h(Icon.refresh)),
+          h('button', { className: 'ad-btn icon ghost', title: t('refresh'), 'aria-label': t('refresh'), onClick: load }, h(Icon.refresh)),
           h('button', { className: 'ad-btn primary', onClick: () => setAdding(true) }, h(Icon.plus), t('new_task'))),
         h('div', { className: 'ad-bar' },
           h('div', { className: 'ad-tabs', role: 'tablist' },
@@ -625,7 +629,7 @@ window.__ModuleLoader__.load({
       const head = d.kind === 'permission' ? `${t('w_permission')}${d.tool ? ` · ${d.tool}` : ''}` : d.kind === 'result' ? t('w_result') : d.kind === 'budget' ? t('w_budget') : d.question;
       return h('div', { className: 'ad-decision', style: { '--tone': tone } },
         h('b', null, head),
-        d.kind ? h('p', { className: 'ad-pre' }, d.question) : null,
+        d.kind ? h('p', { className: 'ad-pre' }, d.kind === 'permission' && d.tool ? String(d.question).replace(`Allow ${d.tool}?`, fill(t('allow_tool'), d.tool)) : d.question) : null,
         d.reversible === false ? h('div', { className: 'ad-muted', style: { fontSize: 11 } }, t('irreversible')) : null,
         d.kind === 'result' ? h('textarea', { className: 'ad-textarea', style: { minHeight: 48 }, placeholder: t('note_ph'), value: note, onChange: (e) => setNote(e.target.value) }) : null,
         h('div', { className: 'ad-actions' },
@@ -691,7 +695,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'ad-drawer-head' },
             h('div', { className: 'ad-drawer-title' },
               h('h2', null, task ? `${num(task)} ${task.title}` : t('loading')),
-              h('button', { className: 'ad-btn icon ghost', title: t('close'), onClick: onClose }, h(Icon.close))),
+              h('button', { className: 'ad-btn icon ghost', title: t('close'), 'aria-label': t('close'), onClick: onClose }, h(Icon.close))),
             task ? h('div', { className: 'ad-meta' },
               h(Tag, { t, state: task.state }),
               d.task.projectId ? h('span', null, d.project?.name || '') : null,
