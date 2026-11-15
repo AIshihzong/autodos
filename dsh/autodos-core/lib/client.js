@@ -17,8 +17,50 @@ window.__ModuleLoader__.load({
     const PANEL = 'autodos-tasks';
     const DICT = {
       zh: {
-        panel: '任务',
+        panel: 'Autodos',
         title: '任务',
+        brand_sub: '大总管',
+        sec_tasks: '任务',
+        sec_staff: '员工',
+        sec_machines: '机器',
+        add_staff: '添加员工',
+        add_machine: '添加机器',
+        edit: '编辑',
+        remove: '删除',
+        remove_confirm: '确定删除？',
+        save: '保存',
+        staff_name: '名字',
+        staff_name_ph: '比如：前端工程师',
+        staff_role: '负责什么',
+        staff_role_ph: '比如：页面、交互和样式',
+        staff_runtime: '用哪个 agent',
+        staff_machine: '在哪台机器干活',
+        staff_instr: '工作说明',
+        staff_instr_ph: '每次派活都会带上，比如代码规范、注意事项',
+        staff_empty: '还没有员工。添加一个，派活时就能指定谁来做。',
+        rt_claude: 'Claude Code',
+        rt_codex: 'Codex',
+        rt_auto: '自动',
+        m_name: '名字',
+        m_name_ph: '比如：工作室 Mac',
+        m_host: 'Paseo 地址',
+        m_host_ph: '比如 192.168.1.20:6767',
+        m_capacity: '同时最多跑几个',
+        m_notes: '备注',
+        m_local: '本机',
+        m_running: '正在跑',
+        m_agents: '装了的 agent',
+        m_used: '用过',
+        m_none_found: '没找到',
+        m_staff: '在这台机器的员工',
+        m_remote_note: '另一台机器要先装好 Paseo 并启动 daemon，项目在那台机器上也要有一份代码。',
+        c_count_working: '进行中',
+        c_count_waiting: '等你',
+        c_count_stuck: '卡住',
+        c_count_queued: '排队',
+        c_count_done: '完成',
+        f_staff: '谁来做',
+        f_staff_any: '不指定',
         empty: '这里没有任务。',
         empty_inbox: '没有等你处理的任务。',
         all: '显示已结束的',
@@ -108,8 +150,50 @@ window.__ModuleLoader__.load({
         e_other: '记录',
       },
       en: {
-        panel: 'Tasks',
+        panel: 'Autodos',
         title: 'Tasks',
+        brand_sub: 'Chief of staff',
+        sec_tasks: 'Tasks',
+        sec_staff: 'Staff',
+        sec_machines: 'Machines',
+        add_staff: 'Add staff',
+        add_machine: 'Add machine',
+        edit: 'Edit',
+        remove: 'Remove',
+        remove_confirm: 'Remove it?',
+        save: 'Save',
+        staff_name: 'Name',
+        staff_name_ph: 'e.g. Frontend engineer',
+        staff_role: 'Responsible for',
+        staff_role_ph: 'e.g. pages, interaction and styles',
+        staff_runtime: 'Agent',
+        staff_machine: 'Works on machine',
+        staff_instr: 'Instructions',
+        staff_instr_ph: 'Sent with every task, e.g. coding rules and things to watch',
+        staff_empty: 'No staff yet. Add someone to choose who does a task.',
+        rt_claude: 'Claude Code',
+        rt_codex: 'Codex',
+        rt_auto: 'Auto',
+        m_name: 'Name',
+        m_name_ph: 'e.g. Studio Mac',
+        m_host: 'Paseo address',
+        m_host_ph: 'e.g. 192.168.1.20:6767',
+        m_capacity: 'At most at once',
+        m_notes: 'Notes',
+        m_local: 'This machine',
+        m_running: 'Running',
+        m_agents: 'Agents installed',
+        m_used: 'used',
+        m_none_found: 'none found',
+        m_staff: 'Staff on this machine',
+        m_remote_note: 'The other machine needs Paseo installed with its daemon running, and its own checkout of the project.',
+        c_count_working: 'working',
+        c_count_waiting: 'needs you',
+        c_count_stuck: 'stuck',
+        c_count_queued: 'queued',
+        c_count_done: 'done',
+        f_staff: 'Who does it',
+        f_staff_any: 'Anyone',
         empty: 'No tasks here.',
         empty_inbox: 'Nothing is waiting on you.',
         all: 'Show finished',
@@ -218,9 +302,36 @@ window.__ModuleLoader__.load({
   --ad-lift:0 0 0 .5px color-mix(in srgb,var(--ad-ink) 9%,transparent),0 6px 18px rgba(0,0,0,.07);
   --ad-mask:color-mix(in srgb,var(--dsw-alias-bg-mask-3,#0000007a) 46%,transparent);
   --ad-ease:cubic-bezier(.4,0,.2,1);
+  --ad-brand:#0e8a7c;--ad-brand-hover:#0b7569;--ad-brand-soft:rgba(14,138,124,.10);--ad-on-brand:#fff;
   font-family:var(--dsh-font-family-text-default,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif);
   color:var(--ad-ink);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
+@media (prefers-color-scheme:dark){.ad-page,.ad-overlay{--ad-brand:#3cc2b1;--ad-brand-hover:#5fd0c2;--ad-brand-soft:rgba(60,194,177,.13);--ad-on-brand:#06201d}}
 .ad-page *,.ad-overlay *{box-sizing:border-box}
+.ad-brand{display:flex;align-items:center;gap:10px;flex:none}
+.ad-brand svg{flex:none;border-radius:8px}
+.ad-brand b{font-size:17px;font-weight:700;letter-spacing:-.01em}
+.ad-brand span{font-size:11.5px;color:var(--ad-ink-3);padding-left:10px;border-left:1px solid var(--ad-line)}
+.ad-nav{display:flex;gap:4px;margin-left:8px}
+.ad-nav button{cursor:pointer;border:none;background:transparent;color:var(--ad-ink-2);height:30px;padding:0 12px;border-radius:8px;font-size:13px;font-weight:560;display:inline-flex;gap:6px;align-items:center}
+.ad-nav button:hover{background:var(--ad-hover);color:var(--ad-ink)}
+.ad-nav button.on{background:var(--ad-brand-soft);color:var(--ad-brand)}
+.ad-nav .n{min-width:18px;height:17px;padding:0 5px;border-radius:9px;background:var(--ad-amber);color:#fff;font-size:10px;display:inline-flex;align-items:center;justify-content:center}
+.ad-topline{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--ad-line-soft)}
+.ad-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;align-items:start}
+.ad-person{border:1px solid var(--ad-line);border-radius:14px;background:var(--ad-surface);padding:14px;display:flex;flex-direction:column;gap:10px}
+.ad-person-head{display:flex;gap:10px;align-items:center}
+.ad-avatar{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;font-weight:700;font-size:15px;color:#fff;background:var(--tone,var(--ad-brand));flex:none}
+.ad-person-head b{font-size:14px}
+.ad-chips{display:flex;gap:6px;flex-wrap:wrap}
+.ad-chip{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:7px;font-size:11px;background:var(--ad-surface-2);color:var(--ad-ink-2);border:1px solid var(--ad-line-soft);white-space:nowrap}
+.ad-chip.ok{color:var(--ad-brand);background:var(--ad-brand-soft);border-color:transparent}
+.ad-chip.off{color:var(--ad-ink-4)}
+.ad-stats{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--ad-ink-3)}
+.ad-stats b{color:var(--ad-ink);font-variant-numeric:tabular-nums;margin-right:3px}
+.ad-mini{display:flex;flex-direction:column;gap:2px}
+.ad-mini button{cursor:pointer;text-align:left;border:none;background:transparent;color:var(--ad-ink-2);font-size:12px;padding:3px 6px;border-radius:6px;display:flex;gap:6px;align-items:center;min-width:0}
+.ad-mini button:hover{background:var(--ad-hover);color:var(--ad-ink)}
+.ad-mini button span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ad-page button,.ad-page input,.ad-page textarea,.ad-page select,.ad-overlay button,.ad-overlay input,.ad-overlay textarea,.ad-overlay select{font-family:inherit}
 .ad-page{height:100%;display:flex;flex-direction:column;gap:12px;overflow:hidden;background:var(--ad-base);
   padding:calc(var(--dsh-frame-top-clearance,0px) + 22px) 26px 16px}
@@ -246,8 +357,8 @@ window.__ModuleLoader__.load({
   transition:background .18s var(--ad-ease),border-color .18s,color .18s,transform .12s}
 .ad-btn:hover{background:var(--ad-hover);border-color:var(--ad-line-strong)}
 .ad-btn:active{transform:translateY(.5px)}
-.ad-btn.primary{background:var(--ad-primary);border-color:transparent;color:var(--ad-on-primary);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.12)}
-.ad-btn.primary:hover{background:var(--ad-primary-hover)}
+.ad-btn.primary{background:var(--ad-brand);border-color:transparent;color:var(--ad-on-brand);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.ad-btn.primary:hover{background:var(--ad-brand-hover)}
 .ad-btn.ghost{background:transparent;border-color:transparent;color:var(--ad-ink-2)}
 .ad-btn.ghost:hover{background:var(--ad-hover);color:var(--ad-ink)}
 .ad-btn.icon{padding:0;width:32px}
@@ -258,7 +369,7 @@ window.__ModuleLoader__.load({
 .ad-tabs{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--ad-line);border-radius:10px;background:var(--ad-surface)}
 .ad-tabs button{cursor:pointer;border:none;background:transparent;color:var(--ad-ink-2);height:26px;padding:0 11px;border-radius:7px;font-size:12px;display:inline-flex;gap:5px;align-items:center}
 .ad-tabs button:hover{background:var(--ad-hover);color:var(--ad-ink)}
-.ad-tabs button.on{background:var(--ad-surface-2);color:var(--ad-ink);font-weight:620}
+.ad-tabs button.on{background:var(--ad-brand-soft);color:var(--ad-brand);font-weight:620}
 .ad-tabs .n{font-size:10.5px;color:var(--ad-ink-3);font-variant-numeric:tabular-nums}
 
 .ad-input,.ad-textarea,.ad-select{width:100%;height:32px;border:1px solid var(--ad-line);border-radius:9px;background:var(--ad-surface);
@@ -520,15 +631,13 @@ window.__ModuleLoader__.load({
         }));
     }
 
-    function TasksPage({ t }) {
-      useEffect(ensureStyle, []);
+    function TasksPage({ t, open, setOpen, onCounts }) {
       const [data, setData] = useState(null);
       const [error, setError] = useState('');
       const [view, setViewState] = useState(() => store.get('view', 'inbox'));
       const [all, setAll] = useState(() => store.get('all', '0') === '1');
       const [query, setQuery] = useState('');
       const [project, setProject] = useState(() => store.get('project', ''));
-      const [open, setOpen] = useState(null);
       const [adding, setAdding] = useState(false);
       const setView = (v) => (setViewState(v), store.set('view', v));
 
@@ -553,10 +662,10 @@ window.__ModuleLoader__.load({
       }, [data, query, project, all, view]);
       const count = (states) => (data?.rows || []).filter((r) => states.includes(r.state)).length;
       const inboxN = count(['waiting_you', 'stuck', 'failed']);
+      useEffect(() => onCounts?.(inboxN), [inboxN, onCounts]);
 
-      return h('div', { className: 'ad-page' },
+      return h(React.Fragment, null,
         h('div', { className: 'ad-head' },
-          h('h1', null, t('title')),
           data ? h('div', { className: 'ad-sum' },
             COLUMNS.filter((c) => !c.finished).map((c) => h('span', { key: c.key }, h('span', { className: 'ad-dot', style: { '--tone': c.tone } }), `${count(c.states)} ${t(c.key)}`))) : null,
           h('span', { className: 'ad-grow' }),
@@ -577,8 +686,173 @@ window.__ModuleLoader__.load({
             : view === 'list' ? h(List, { t, rows, onOpen: setOpen })
             : h(Inbox, { t, rows, onOpen: setOpen, selected: open })),
         data?.imported ? h('div', { className: 'ad-muted', style: { fontSize: 11 } }, `${t('imported')} · ${when(data.imported.at)}`) : null,
-        open ? h(Drawer, { t, id: open, onClose: () => setOpen(null), onChanged: load }) : null,
         adding ? h(NewTask, { t, onCancel: () => setAdding(false), onDone: (task) => { setAdding(false); load(); if (task?.id) setOpen(task.id); } }) : null);
+    }
+
+    // ---------------------------------------------------------------- brand and shell
+
+    // The Autodos mark: three bars of work getting shorter as it lands.
+    const Logo = ({ size = 28 }) => h('svg', { width: size, height: size, viewBox: '0 0 64 64', 'aria-hidden': true },
+      h('rect', { width: 64, height: 64, rx: 14, fill: '#15171a' }),
+      h('rect', { x: 12, y: 14, width: 11, height: 36, rx: 3, fill: '#2bb3a3' }),
+      h('rect', { x: 27, y: 14, width: 11, height: 24, rx: 3, fill: '#2bb3a3', opacity: 0.7 }),
+      h('rect', { x: 42, y: 14, width: 11, height: 14, rx: 3, fill: '#2bb3a3', opacity: 0.45 }));
+
+    function AutodosPage({ t }) {
+      useEffect(ensureStyle, []);
+      const [section, setSectionState] = useState(() => store.get('section', 'tasks'));
+      const setSection = (v) => (setSectionState(v), store.set('section', v));
+      const [open, setOpen] = useState(null);
+      const [inboxN, setInboxN] = useState(0);
+      const [tick, setTick] = useState(0);
+      return h('div', { className: 'ad-page' },
+        h('div', { className: 'ad-topline' },
+          h('div', { className: 'ad-brand' }, h(Logo), h('b', null, 'Autodos'), h('span', null, t('brand_sub'))),
+          h('nav', { className: 'ad-nav' },
+            ['tasks', 'staff', 'machines'].map((v) => h('button', { key: v, className: section === v ? 'on' : '', 'aria-current': section === v ? 'page' : undefined, onClick: () => setSection(v) },
+              t(`sec_${v}`), v === 'tasks' && inboxN ? h('span', { className: 'n' }, inboxN) : null)))),
+        section === 'staff' ? h(StaffPage, { t, onOpen: setOpen, tick })
+          : section === 'machines' ? h(MachinesPage, { t, onOpen: setOpen, tick })
+          : h(TasksPage, { t, open, setOpen, onCounts: setInboxN, key: tick }),
+        open ? h(Drawer, { t, id: open, onClose: () => setOpen(null), onChanged: () => setTick((x) => x + 1) }) : null);
+    }
+
+    // ---------------------------------------------------------------- staff and machines
+
+    function useTeam() {
+      const [data, setData] = useState(null);
+      const [error, setError] = useState('');
+      const load = useCallback(() => getJson('/api/autodos/team').then((d) => (setData(d), setError('')), (e) => setError(e.message)), []);
+      useEffect(() => {
+        load();
+        const timer = setInterval(load, 8000);
+        return () => clearInterval(timer);
+      }, [load]);
+      return { data, error, load };
+    }
+
+    const PALETTE = ['#0e8a7c', '#3b6fd8', '#c27a12', '#9b51e0', '#d6457a', '#2f9a5c', '#6b6b70'];
+    const colorOf = (s) => s.color || PALETTE[[...String(s.name || s.id)].reduce((a, c) => a + c.charCodeAt(0), 0) % PALETTE.length];
+
+    function TaskMini({ t, tasks, onOpen }) {
+      if (!tasks?.length) return null;
+      return h('div', { className: 'ad-mini' }, tasks.slice(0, 6).map((x) => h('button', { key: x.id, onClick: () => onOpen(x.id) }, h(Dot, { state: x.state }), h('span', null, `#${x.number} ${x.title}`))),
+        tasks.length > 6 ? h('div', { className: 'ad-muted', style: { fontSize: 11, paddingLeft: 6 } }, fill(t('more'), tasks.length - 6)) : null);
+    }
+
+    function Confirmable({ t, onConfirm, busy }) {
+      const [ask, setAsk] = useState(false);
+      return ask
+        ? h(React.Fragment, null, h('button', { className: 'ad-btn danger', disabled: busy, onClick: onConfirm }, t('remove_confirm')), h('button', { className: 'ad-btn ghost', onClick: () => setAsk(false) }, t('cancel')))
+        : h('button', { className: 'ad-btn ghost', onClick: () => setAsk(true) }, t('remove'));
+    }
+
+    function Modal({ t, title, children, onCancel, onSave, busy, canSave, error, note }) {
+      useEscape(onCancel);
+      return h('div', { className: 'ad-overlay' },
+        h('div', { className: 'ad-modal-mask', onMouseDown: (e) => e.target === e.currentTarget && onCancel() },
+          h('div', { className: 'ad-modal', role: 'dialog', 'aria-modal': true, onKeyDown: (e) => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && canSave && onSave() },
+            h('h3', null, title), children,
+            note ? h('div', { className: 'ad-muted', style: { fontSize: 12 } }, note) : null,
+            error ? h('div', { className: 'ad-err' }, error) : null,
+            h('div', { className: 'ad-actions', style: { justifyContent: 'flex-end' } },
+              h('button', { className: 'ad-btn ghost', onClick: onCancel }, t('cancel')),
+              h('button', { className: 'ad-btn primary', disabled: busy || !canSave, onClick: onSave }, busy ? t('working_on') : t('save'))))));
+    }
+
+    const Field = ({ label, children }) => h('div', { className: 'ad-field' }, h('label', null, label), children);
+
+    function StaffForm({ t, staff, machines, onDone, onCancel }) {
+      const [f, setF] = useState(() => ({ name: staff?.name || '', role: staff?.role || '', runtime: staff?.runtime || 'claude', machine: staff?.machine || 'local', instructions: staff?.instructions || '' }));
+      const { busy, error, run } = useAction(onDone);
+      const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+      const save = () => run(staff ? { action: 'update_staff', staff: staff.id, ...f } : { action: 'create_staff', ...f });
+      return h(Modal, { t, title: staff ? `${t('edit')} · ${staff.name}` : t('add_staff'), onCancel, onSave: save, busy, canSave: Boolean(f.name.trim()), error },
+        h(Field, { label: t('staff_name') }, h('input', { className: 'ad-input', value: f.name, placeholder: t('staff_name_ph'), onChange: set('name'), autoFocus: true })),
+        h(Field, { label: t('staff_role') }, h('input', { className: 'ad-input', value: f.role, placeholder: t('staff_role_ph'), onChange: set('role') })),
+        h('div', { className: 'ad-bar' },
+          h(Field, { label: t('staff_runtime') }, h('select', { className: 'ad-select', value: f.runtime, onChange: set('runtime') }, ['claude', 'codex', 'auto'].map((r) => h('option', { key: r, value: r }, t(`rt_${r}`))))),
+          h(Field, { label: t('staff_machine') }, h('select', { className: 'ad-select', value: f.machine, onChange: set('machine') }, (machines || []).map((m) => h('option', { key: m.id, value: m.id }, m.local ? `${host(m.name)} · ${t('m_local')}` : host(m.name)))))),
+        h(Field, { label: t('staff_instr') }, h('textarea', { className: 'ad-textarea', style: { minHeight: 100 }, value: f.instructions, placeholder: t('staff_instr_ph'), onChange: set('instructions') })));
+    }
+
+    function StaffPage({ t, onOpen, tick }) {
+      const { data, error, load } = useTeam();
+      const [editing, setEditing] = useState(null);
+      const { busy, error: actError, run } = useAction(load);
+      useEffect(() => void load(), [tick, load]);
+      const done = () => (setEditing(null), load());
+      return h(React.Fragment, null,
+        h('div', { className: 'ad-head' },
+          data ? h('div', { className: 'ad-sum' }, h('span', null, `${data.staff.length} ${t('sec_staff')}`)) : null,
+          h('span', { className: 'ad-grow' }),
+          h('button', { className: 'ad-btn primary', onClick: () => setEditing('new') }, h(Icon.plus), t('add_staff'))),
+        error || actError ? h('div', { className: 'ad-err' }, error || actError) : null,
+        h('div', { className: 'ad-scroll' },
+          !data ? h('div', { className: 'ad-muted' }, t('loading'))
+            : !data.staff.length ? h('div', { className: 'ad-empty' }, t('staff_empty'))
+            : h('div', { className: 'ad-grid' }, data.staff.map((s) => h('article', { key: s.id, className: 'ad-person' },
+              h('div', { className: 'ad-person-head' },
+                h('div', { className: 'ad-avatar', style: { '--tone': colorOf(s) } }, String(s.name || '?').slice(0, 1)),
+                h('div', { style: { minWidth: 0, flex: 1 } }, h('b', null, s.name), s.role ? h('div', { className: 'ad-muted', style: { fontSize: 12 } }, s.role) : null)),
+              h('div', { className: 'ad-chips' },
+                h('span', { className: 'ad-chip ok' }, t(`rt_${['claude', 'codex', 'auto'].includes(s.runtime) ? s.runtime : 'auto'}`)),
+                h('span', { className: 'ad-chip' }, host(s.machineName) || t('m_local')),
+                s.spentUsd ? h('span', { className: 'ad-chip' }, `${t('spent')} $${s.spentUsd.toFixed(2)}`) : null),
+              h('div', { className: 'ad-stats' }, ['working', 'waiting', 'stuck', 'queued', 'done'].map((k) => h('span', { key: k }, h('b', null, s.counts[k]), t(`c_count_${k}`)))),
+              h(TaskMini, { t, tasks: s.tasks, onOpen }),
+              s.instructions ? h('div', { className: 'ad-need', title: s.instructions }, s.instructions) : null,
+              h('div', { className: 'ad-actions' },
+                h('button', { className: 'ad-btn', onClick: () => setEditing(s) }, t('edit')),
+                h('span', { className: 'ad-grow' }),
+                h(Confirmable, { t, busy, onConfirm: () => run({ action: 'remove_staff', staff: s.id }) })))))),
+        editing ? h(StaffForm, { t, staff: editing === 'new' ? null : editing, machines: data?.machines, onDone: done, onCancel: () => setEditing(null) }) : null);
+    }
+
+    function MachineForm({ t, machine, onDone, onCancel }) {
+      const [f, setF] = useState(() => ({ name: machine?.name || '', paseoHost: machine?.paseoHost || '', capacity: machine?.capacity || 2, notes: machine?.notes || '' }));
+      const { busy, error, run } = useAction(onDone);
+      const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+      const local = machine?.local;
+      const save = () => run(machine ? { action: 'update_machine', machine: machine.id, ...f, ...(local ? { paseoHost: undefined } : {}) } : { action: 'create_machine', ...f });
+      return h(Modal, { t, title: machine ? `${t('edit')} · ${host(machine.name)}` : t('add_machine'), onCancel, onSave: save, busy, canSave: Boolean(f.name.trim() && (local || f.paseoHost.trim())), error, note: local ? null : t('m_remote_note') },
+        h(Field, { label: t('m_name') }, h('input', { className: 'ad-input', value: f.name, placeholder: t('m_name_ph'), onChange: set('name'), autoFocus: true })),
+        local ? null : h(Field, { label: t('m_host') }, h('input', { className: 'ad-input', value: f.paseoHost, placeholder: t('m_host_ph'), onChange: set('paseoHost') })),
+        h(Field, { label: t('m_capacity') }, h('input', { className: 'ad-input', type: 'number', min: 1, max: 32, value: f.capacity, onChange: set('capacity'), style: { width: 120 } })),
+        h(Field, { label: t('m_notes') }, h('textarea', { className: 'ad-textarea', value: f.notes, onChange: set('notes') })));
+    }
+
+    function MachinesPage({ t, onOpen, tick }) {
+      const { data, error, load } = useTeam();
+      const [editing, setEditing] = useState(null);
+      const { busy, error: actError, run } = useAction(load);
+      useEffect(() => void load(), [tick, load]);
+      const done = () => (setEditing(null), load());
+      return h(React.Fragment, null,
+        h('div', { className: 'ad-head' },
+          data ? h('div', { className: 'ad-sum' }, h('span', null, `${data.machines.length} ${t('sec_machines')}`), h('span', null, h('span', { className: 'ad-dot live', style: { '--tone': 'var(--ad-blue)' } }), `${data.machines.reduce((n, m) => n + m.running, 0)} ${t('m_running')}`)) : null,
+          h('span', { className: 'ad-grow' }),
+          h('button', { className: 'ad-btn primary', onClick: () => setEditing('new') }, h(Icon.plus), t('add_machine'))),
+        error || actError ? h('div', { className: 'ad-err' }, error || actError) : null,
+        h('div', { className: 'ad-scroll' },
+          !data ? h('div', { className: 'ad-muted' }, t('loading'))
+            : h('div', { className: 'ad-grid' }, data.machines.map((m) => h('article', { key: m.id, className: 'ad-person' },
+              h('div', { className: 'ad-person-head' },
+                h('div', { className: 'ad-avatar', style: { '--tone': m.local ? 'var(--ad-brand)' : '#3b6fd8' } }, h('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }, h('rect', { x: 3, y: 4, width: 18, height: 12, rx: 2 }), h('path', { d: 'M8 20h8M12 16v4' }))),
+                h('div', { style: { minWidth: 0, flex: 1 } }, h('b', null, host(m.name)), h('div', { className: 'ad-muted', style: { fontSize: 12 } }, m.local ? t('m_local') : m.paseoHost || m.host || m.executor || ''))),
+              h('div', { className: 'ad-stats' },
+                h('span', null, h('b', null, `${m.running}${m.capacity ? ` / ${m.capacity}` : ''}`), t('m_running')),
+                m.spentUsd ? h('span', null, h('b', null, `$${m.spentUsd.toFixed(2)}`), t('spent')) : null,
+                m.lastActiveAt ? h('span', null, ago(m.lastActiveAt)) : null),
+              m.agents ? h('div', null, h('div', { className: 'ad-muted', style: { fontSize: 11, marginBottom: 4 } }, t('m_agents')),
+                h('div', { className: 'ad-chips' }, m.agents.map((a) => h('span', { key: a.kind, className: `ad-chip${a.installed ? ' ok' : ' off'}`, title: a.used ? t('m_used') : '' }, `${a.installed ? '✓ ' : ''}${a.name}${!a.installed && a.used ? ` · ${t('m_used')}` : ''}`)))) : null,
+              m.staff.length ? h('div', null, h('div', { className: 'ad-muted', style: { fontSize: 11, marginBottom: 4 } }, t('m_staff')), h('div', { className: 'ad-chips' }, m.staff.map((s) => h('span', { key: s.id, className: 'ad-chip' }, s.name)))) : null,
+              h(TaskMini, { t, tasks: m.tasks, onOpen }),
+              h('div', { className: 'ad-actions' },
+                h('button', { className: 'ad-btn', onClick: () => setEditing(m) }, t('edit')),
+                h('span', { className: 'ad-grow' }),
+                m.local ? null : h(Confirmable, { t, busy, onConfirm: () => run({ action: 'remove_machine', machine: m.id }) })))))),
+        editing ? h(MachineForm, { t, machine: editing === 'new' ? null : editing, onDone: done, onCancel: () => setEditing(null) }) : null);
     }
 
     // ---------------------------------------------------------------- new task
@@ -586,12 +860,14 @@ window.__ModuleLoader__.load({
     function NewTask({ t, onDone, onCancel }) {
       const [projects, setProjects] = useState(null);
       const [exec, setExec] = useState(true);
-      const [f, setF] = useState({ title: '', description: '', project: '', start: true });
+      const [f, setF] = useState({ title: '', description: '', project: '', staff: '', start: true });
+      const [staffList, setStaffList] = useState([]);
       const { busy, error, run } = useAction(onDone);
       useEscape(onCancel);
       useEffect(() => {
         getJson('/api/autodos/projects').then((d) => {
           setProjects(d.projects);
+          setStaffList(d.staff || []);
           setExec(d.execution);
           setF((x) => ({ ...x, project: x.project || store.get('newProject', '') || d.projects.find((p) => p.path)?.id || '' }));
         }, () => setProjects([]));
@@ -600,7 +876,7 @@ window.__ModuleLoader__.load({
       const submit = () => {
         if (busy || !f.title.trim()) return;
         store.set('newProject', f.project);
-        run({ action: 'create_task', title: f.title.trim(), description: f.description, project: f.project || undefined, start: f.start && exec && Boolean(f.project) });
+        run({ action: 'create_task', title: f.title.trim(), description: f.description, project: f.project || undefined, staff: f.staff || undefined, start: f.start && exec && Boolean(f.project) });
       };
       return h('div', { className: 'ad-overlay' },
         h('div', { className: 'ad-modal-mask', onMouseDown: (e) => e.target === e.currentTarget && onCancel() },
@@ -612,6 +888,9 @@ window.__ModuleLoader__.load({
               h('div', { className: 'ad-field', style: { flex: 1 } }, h('label', null, t('f_project')),
                 h('select', { className: 'ad-select', style: { width: '100%' }, value: f.project, onChange: set('project') },
                   h('option', { value: '' }, t('none')), (projects || []).map((p) => h('option', { key: p.id, value: p.id }, p.name)))),
+              h('div', { className: 'ad-field', style: { flex: 1 } }, h('label', null, t('f_staff')),
+                h('select', { className: 'ad-select', style: { width: '100%' }, value: f.staff, onChange: set('staff') },
+                  h('option', { value: '' }, t('f_staff_any')), staffList.map((x) => h('option', { key: x.id, value: x.id }, x.role ? `${x.name} · ${x.role}` : x.name)))),
               h('label', { className: 'ad-check', style: { alignSelf: 'flex-end', height: 32 } }, h('input', { type: 'checkbox', checked: f.start && exec, disabled: !exec, onChange: set('start') }), t('f_start'))),
             !exec ? h('div', { className: 'ad-muted', style: { fontSize: 12 } }, t('no_exec')) : null,
             error ? h('div', { className: 'ad-err' }, error) : null,
@@ -739,16 +1018,17 @@ window.__ModuleLoader__.load({
 
     // ---------------------------------------------------------------- registration
 
+    // The Autodos mark in the sidebar's own line style: three bars, shorter as work lands.
     const SideIcon = ({ size = 18 }) => h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' },
-      h('rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }),
-      h('path', { d: 'M7 9h4M7 13h7M7 17h5' }),
-      h('path', { d: 'M15 8.5l1.2 1.2L18.5 7.5' }));
+      h('rect', { x: 4, y: 4, width: 4, height: 15, rx: 1.2 }),
+      h('rect', { x: 10, y: 4, width: 4, height: 10, rx: 1.2 }),
+      h('rect', { x: 16, y: 4, width: 4, height: 6, rx: 1.2 }));
 
     function apply(ctx) {
       ctx.effect(() => ctx.locale.register(NS, DICT), 'autodos: dictionaries');
       const t = ctx.locale.bind(NS);
       ctx.slots.inject('main', function* () {
-        yield ctx.slots.register({ name: 'main', key: PANEL, locale: NS }, (props) => h(TasksPage, { ...props, t }));
+        yield ctx.slots.register({ name: 'main', key: PANEL, locale: NS }, (props) => h(AutodosPage, { ...props, t }));
       });
       ctx.slots.inject('sidebar.panellist', () =>
         ctx.slots.register({ name: 'sidebar.panellist', id: PANEL, order: 14, label: () => t('panel'), locale: NS }, SideIcon));

@@ -8,6 +8,8 @@
 //
 // Permission requests are only ever answered by the person (the panel routes), never by an agent tool.
 
+import os from 'node:os';
+
 const ACTIVE = new Set(['running', 'busy', 'working', 'thinking', 'starting', 'initializing']);
 const IDLE = new Set(['idle', 'done', 'finished', 'completed', 'stopped', 'waiting']);
 const BROKEN = new Set(['error', 'failed', 'crashed', 'closed', 'exited', 'killed']);
@@ -21,9 +23,13 @@ export class Autodos {
    * @param {import('./store.js').Ledger} ledger
    * @param {{paseo?: ReturnType<import('./paseo.js').createPaseo>, provider?: string, mode?: string, log?: (m: string) => void}} opts
    */
-  constructor(ledger, { paseo = null, git = null, check = null, provider = 'claude', mode, budgetUsd, budgetStepUsd, log = () => {} } = {}) {
+  constructor(ledger, { paseo = null, paseoFor = null, git = null, check = null, provider = 'claude', mode, budgetUsd, budgetStepUsd, log = () => {} } = {}) {
     this.ledger = ledger;
-    this.paseo = paseo;
+    this.paseo = paseo; // the Paseo daemon on this machine
+    this.paseoFor = paseoFor; // (host) => a Paseo client for another machine's daemon
+    this.remote = new Map();
+    // This machine is always on the team, imported or not.
+    if (!ledger.get('machine', 'local')) ledger.create('machine', { id: 'local', name: os.hostname(), local: true, executor: 'paseo' }, { actor: 'system', reason: 'this machine' });
     this.git = git; // lib/land.js createGit(); without it an accepted task is marked done but not merged
     this.check = check; // lib/land.js runCheck
     this.budgetUsd = Number(budgetUsd) > 0 ? Number(budgetUsd) : Number(ledger.get('settings', 'autodos')?.budgetUsd) || 5;
@@ -32,6 +38,19 @@ export class Autodos {
     this.mode = mode;
     this.log = log;
     this.syncing = null;
+  }
+
+  /** The Paseo client for a machine: this machine's own, or one for the daemon at the machine's address. */
+  paseoOn(machineId) {
+    const m = machineId ? this.ledger.get('machine', machineId) : null;
+    if (!m || m.local || !m.paseoHost) return this.paseo;
+    if (!this.paseoFor) return null;
+    if (!this.remote.has(m.paseoHost)) this.remote.set(m.paseoHost, this.paseoFor(m.paseoHost));
+    return this.remote.get(m.paseoHost);
+  }
+
+  agentOf(thread) {
+    return thread ? this.paseoOn(thread.machine) : null;
   }
 
   // ---- reading ----
@@ -85,13 +104,18 @@ export class Autodos {
     return { limit, spent: Math.round(spent * 100) / 100 };
   }
 
-  async createTask({ title, description = '', projectId, project, staffId = null, provider, start = true }, { actor = 'you', reason } = {}) {
+  async createTask({ title, description = '', projectId, project, staffId = null, staff, machine, provider, start = true }, { actor = 'you', reason } = {}) {
     if (!title) throw new Error('A task needs a title');
     const p = projectId || project ? this.project(projectId || project) : null;
+    const s = staffId || staff ? this.ledger.get('staff', staffId || staff) || this.ledger.list('staff').find((x) => x.name?.toLowerCase() === String(staffId || staff).toLowerCase()) : null;
+    if ((staffId || staff) && !s) throw new Error(`No staff ${staffId || staff}`);
+    staffId = s?.id || null;
+    const m = machine ? this.ledger.get('machine', machine) || this.ledger.list('machine').find((x) => x.name?.toLowerCase() === String(machine).toLowerCase()) : null;
+    if (machine && !m) throw new Error(`No machine ${machine}`);
     const number = Math.max(0, ...this.ledger.list('task', { removed: true }).map((t) => Number(t.number) || 0)) + 1;
     const task = this.ledger.create(
       'task',
-      { number, title, description, projectId: p?.id || null, goalId: null, staffId, runtime: provider || this.provider, state: 'queued', labels: [], dependsOn: [], lastProgressAt: new Date().toISOString(), source: 'autodos-core' },
+      { number, title, description, projectId: p?.id || null, goalId: null, staffId, runtime: provider || (s && s.runtime !== 'auto' ? s.runtime : null) || this.provider, machineChoice: m?.id || null, state: 'queued', labels: [], dependsOn: [], lastProgressAt: new Date().toISOString(), source: 'autodos-core' },
       { actor, reason: reason || 'new task' },
     );
     if (start && p) return this.dispatch(task.id, { actor });
@@ -101,25 +125,33 @@ export class Autodos {
   // ---- running ----
 
   async dispatch(ref, { actor = 'you', extra } = {}) {
-    if (!this.paseo) throw new Error('No execution layer: Paseo is not configured');
     const task = this.task(ref);
     if (!task.projectId) throw new Error(`#${task.number} has no project, so there is no repository to work in`);
     const project = this.project(task.projectId);
-    if (!project.path) throw new Error(`Project ${project.name} has no repository path`);
+    const staff = task.staffId ? this.ledger.get('staff', task.staffId) : null;
+    // Where it runs: the task's machine, else its staff member's, else this machine.
+    const machineId = task.machineChoice || staff?.machine || 'local';
+    const machine = this.ledger.get('machine', machineId);
+    if (!machine) throw new Error(`No machine ${machineId}`);
+    const paseo = this.paseoOn(machine.id);
+    if (!paseo) throw new Error(machine.local ? 'No execution layer: Paseo is not configured' : `${machine.name} has no Paseo address`);
+    const cwd = machine.local ? project.path : project.paths?.[machine.id];
+    if (!cwd) throw new Error(machine.local ? `Project ${project.name} has no repository path` : `Project ${project.name} has no checkout on ${machine.name}`);
     const branch = task.branch || `autodos/${task.number}`;
-    const base = task.base || project.base || (this.git ? await this.git.currentBranch(project.path) : null) || undefined;
-    const prompt = taskPrompt(task, project, branch, extra);
-    const run = await this.paseo.dispatch({ cwd: project.path, prompt, provider: task.runtime || this.provider, branch, base, title: `#${task.number} ${task.title}`.slice(0, 80), mode: this.mode });
+    const base = task.base || project.base || (this.git && machine.local ? await this.git.currentBranch(cwd) : null) || undefined;
+    const runtime = staff && staff.runtime !== 'auto' ? staff.runtime : task.runtime || this.provider;
+    const prompt = taskPrompt(task, project, branch, extra, staff);
+    const run = await paseo.dispatch({ cwd, prompt, provider: runtime, branch, base, title: `#${task.number} ${task.title}`.slice(0, 80), mode: this.mode });
     const l = this.ledger;
     return l.transaction(() => {
       const old = this.threadOf(task);
       if (old?.active) l.update('thread', old.id, { active: false, status: 'replaced' }, { actor: 'system', task: task.id, reason: 'dispatched again' });
       const thread = l.create(
         'thread',
-        { taskId: task.id, machine: 'local', runtime: run.provider || task.runtime || this.provider, agentId: run.agentId, sessionId: run.agentId, cwd: project.path, branch, base: base || null, prompt, status: run.status || 'running', active: true, source: 'paseo' },
+        { taskId: task.id, machine: machine.id, staffId: staff?.id || null, runtime: run.provider || runtime, agentId: run.agentId, sessionId: run.agentId, cwd, branch, base: base || null, prompt, status: run.status || 'running', active: true, source: 'paseo' },
         { actor, task: task.id, reason: 'dispatched to Paseo' },
       );
-      return l.update('task', task.id, { state: 'working', threadId: thread.id, branch, base: base || null, machine: 'local', landPending: null, stuck: null, waitingFor: null, waitingKind: null, lastProgressAt: new Date().toISOString() }, { actor, reason: `started ${thread.runtime} on ${branch}` });
+      return l.update('task', task.id, { state: 'working', threadId: thread.id, branch, base: base || null, machine: machine.id, runtime, landPending: null, stuck: null, waitingFor: null, waitingKind: null, lastProgressAt: new Date().toISOString() }, { actor, reason: `started ${thread.runtime} on ${branch}` });
     });
   }
 
@@ -131,8 +163,9 @@ export class Autodos {
     const l = this.ledger;
     const thread = this.threadOf(task);
     l.record('thread.message', { text, threadId: thread?.id || null }, { actor, task: task.id });
-    if (!thread?.active || !this.paseo) return { task: l.get('task', task.id), sent: false };
-    await this.paseo.send({ agentId: thread.agentId, text });
+    const paseo = this.agentOf(thread);
+    if (!thread?.active || !paseo) return { task: l.get('task', task.id), sent: false };
+    await paseo.send({ agentId: thread.agentId, text });
     l.transaction(() => {
       for (const d of this.openDecisions(task.id, 'result')) l.update('decision', d.id, { open: false, choice: 'replied', decidedBy: actor }, { actor, task: task.id, reason: 'replied instead' });
       l.update('task', task.id, { state: 'working', waitingFor: null, waitingKind: null, stuck: null, lastProgressAt: new Date().toISOString() }, { actor, reason: 'replied' });
@@ -146,7 +179,7 @@ export class Autodos {
     if (task.landPending) return this.land(task.id, { actor });
     const thread = this.threadOf(task);
     const why = task.stuck ? `It stopped with: ${task.stuck.split('\n')[0].slice(0, 300)}` : '';
-    if (thread?.active && this.paseo && !BROKEN.has(thread.status)) {
+    if (thread?.active && this.agentOf(thread) && !BROKEN.has(thread.status)) {
       return (await this.reply(task.id, [note || 'Please try again.', why].filter(Boolean).join('\n'), { actor })).task;
     }
     return this.dispatch(task.id, { actor, extra: [note, why && `An earlier attempt failed. ${why}`].filter(Boolean).join('\n') });
@@ -167,7 +200,7 @@ export class Autodos {
     if (d.kind === 'permission') {
       const thread = l.get('thread', d.threadId);
       const allow = picked === PERMISSION_OPTIONS[0];
-      await this.paseo.permit({ agentId: thread.agentId, requestId: d.permissionId, allow });
+      await this.agentOf(thread).permit({ agentId: thread.agentId, requestId: d.permissionId, allow });
       l.transaction(() => {
         close(allow ? 'allowed' : 'denied');
         if (!this.openDecisions(task.id, 'permission').length) l.update('task', task.id, { state: 'working', waitingFor: null, waitingKind: null, lastProgressAt: new Date().toISOString() }, { actor, reason: allow ? 'allowed' : 'denied' });
@@ -212,7 +245,7 @@ export class Autodos {
     const now = () => new Date().toISOString();
     l.update('task', task.id, { state: 'landing', waitingFor: null, waitingKind: null, stuck: null, landPending: null, lastProgressAt: now() }, { actor, reason: 'landing' });
     const sendBack = async (text, reason) => {
-      if (thread?.active && this.paseo) {
+      if (thread?.active && this.agentOf(thread)) {
         l.record('task.landing', { ok: false, reason, text }, { actor: 'system', task: task.id });
         return (await this.reply(task.id, text, { actor: 'system' })).task;
       }
@@ -226,6 +259,9 @@ export class Autodos {
       if (!r.ok) return sendBack(`The check \`${project.check}\` failed in ${cwd}:\n${r.output.slice(-2500)}\n\nFix it, run the check again, and commit.`, 'check failed');
     }
 
+    if (thread && thread.machine && thread.machine !== 'local' && !this.ledger.get('machine', thread.machine)?.local) {
+      return l.update('task', task.id, { state: 'stuck', stuck: `The work is on ${this.ledger.get('machine', thread.machine)?.name || thread.machine}, branch ${branch}. Merging on another machine is not supported yet: merge it there, then close the task.`, landPending: true }, { actor: 'system', reason: 'remote merge' });
+    }
     if (!this.git || !project || !branch) {
       return this.#landed(task, thread, { actor, commit: null, how: 'not merged (no repository to merge into)' });
     }
@@ -240,7 +276,7 @@ export class Autodos {
 
   async #landed(task, thread, { actor, commit, how, base }) {
     const l = this.ledger;
-    if (thread?.active && this.paseo) await this.paseo.stop({ agentId: thread.agentId }).catch((e) => this.log(`stop ${thread.agentId}: ${e.message}`));
+    if (thread?.active && this.agentOf(thread)) await this.agentOf(thread).stop({ agentId: thread.agentId }).catch((e) => this.log(`stop ${thread.agentId}: ${e.message}`));
     l.transaction(() => {
       if (task.branch && !l.list('output', { where: (o) => o.taskId === task.id && o.type === 'change' && o.ref === task.branch }).length) {
         l.create('output', { taskId: task.id, projectId: task.projectId, type: 'change', title: base ? `${task.branch} → ${base}` : task.branch, ref: task.branch, commit, seen: true }, { actor, task: task.id, reason: 'landed' });
@@ -256,7 +292,7 @@ export class Autodos {
   async drop(ref, { actor = 'you', reason = 'dropped' } = {}) {
     const task = this.task(ref);
     const thread = this.threadOf(task);
-    if (thread?.active && this.paseo) await this.paseo.stop({ agentId: thread.agentId }).catch((e) => this.log(`stop ${thread.agentId}: ${e.message}`));
+    if (thread?.active && this.agentOf(thread)) await this.agentOf(thread).stop({ agentId: thread.agentId }).catch((e) => this.log(`stop ${thread.agentId}: ${e.message}`));
     const l = this.ledger;
     l.transaction(() => {
       for (const d of this.openDecisions(task.id)) l.update('decision', d.id, { open: false, choice: 'dropped', decidedBy: actor }, { actor, task: task.id, reason });
@@ -270,7 +306,7 @@ export class Autodos {
 
   /** Follow every active agent once. Safe to call often: it runs one pass at a time. */
   sync() {
-    if (!this.paseo) return Promise.resolve([]);
+    if (!this.paseo && !this.paseoFor) return Promise.resolve([]);
     if (!this.syncing) this.syncing = this.#syncAll().finally(() => (this.syncing = null));
     return this.syncing;
   }
@@ -289,7 +325,9 @@ export class Autodos {
 
   async syncThread(thread) {
     const l = this.ledger;
-    const st = await this.paseo.status({ agentId: thread.agentId });
+    const paseo = this.agentOf(thread);
+    if (!paseo) return null;
+    const st = await paseo.status({ agentId: thread.agentId });
     const task = l.get('task', thread.taskId);
     if (!task) return null;
     const meta = { actor: `agent:${thread.runtime || 'agent'}`, task: task.id };
@@ -358,7 +396,7 @@ export class Autodos {
     if (!task || !thread?.active) return;
     const { limit, spent } = this.budget(task);
     if (spent < limit) return;
-    await this.paseo.stop({ agentId: thread.agentId }).catch((e) => this.log(`stop ${thread.agentId}: ${e.message}`));
+    await this.agentOf(thread)?.stop({ agentId: thread.agentId }).catch((e) => this.log(`stop ${thread.agentId}: ${e.message}`));
     l.transaction(() => {
       l.update('thread', thread.id, { active: false, status: 'stopped' }, { actor: 'system', task: task.id, reason: 'budget reached' });
       for (const d of this.openDecisions(task.id)) l.update('decision', d.id, { open: false, choice: 'budget', decidedBy: 'system' }, { actor: 'system', task: task.id, reason: 'budget reached' });
@@ -404,8 +442,9 @@ export function newText(seen, next) {
   return next;
 }
 
-function taskPrompt(task, project, branch, extra) {
+function taskPrompt(task, project, branch, extra, staff) {
   return [
+    staff ? `You are ${staff.name}${staff.role ? `, ${staff.role}` : ''}.${staff.instructions ? `\n${staff.instructions}` : ''}\n` : '',
     `Task #${task.number}: ${task.title}`,
     task.description ? `\n${task.description}` : '',
     `\nYou are working in project "${project.name}" on branch ${branch}, in its own worktree.`,

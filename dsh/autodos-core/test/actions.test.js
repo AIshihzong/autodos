@@ -346,3 +346,69 @@ test('a task stops at its budget and asks before spending more', async () => {
   assert.match(paseo.calls.at(-1)[1].prompt, /stopped at its budget/);
   assert.deepEqual(a.budget(more), { limit: 6.2, spent: 1.2 });
 });
+
+// ---- the team ----
+import { Team, detectAgents } from '../lib/team.js';
+
+test('staff and machines: who runs a task, where, and with what instructions', async () => {
+  const l = new Ledger(':memory:');
+  const local = fakePaseo();
+  const remote = fakePaseo();
+  const hosts = [];
+  const a = new Autodos(l, { paseo: local, paseoFor: (host) => (hosts.push(host), remote) });
+  const team = new Team(l);
+  const p = a.createProject({ name: 'Demo', path: '/repos/demo' });
+  const fe = team.createStaff({ name: '前端工程师', role: 'UI and pages', runtime: 'codex', instructions: 'Use the design tokens.' });
+  assert.throws(() => team.createStaff({ name: '前端工程师' }), /already exists/);
+  assert.throws(() => team.createStaff({ name: 'x', runtime: 'gpt' }), /Runtime/);
+
+  const t = await a.createTask({ title: 'Footer', project: 'Demo', staff: '前端工程师' });
+  const [, run] = local.calls[0];
+  assert.equal(run.provider, 'codex');
+  assert.match(run.prompt, /^You are 前端工程师, UI and pages\.\nUse the design tokens\./);
+  assert.equal(l.get('thread', t.threadId).staffId, fe.id);
+
+  // A second machine, reached through its own Paseo daemon.
+  assert.throws(() => team.createMachine({ name: 'studio' }), /Paseo daemon/);
+  const studio = team.createMachine({ name: 'studio', paseoHost: '192.168.1.20:6767', capacity: 3 });
+  const be = team.createStaff({ name: '后端工程师', runtime: 'claude', machine: 'studio' });
+  await assert.rejects(a.createTask({ title: 'API', project: 'Demo', staff: be.id }), /no checkout on studio/);
+  a.updateProject('Demo', {});
+  l.update('project', p.id, { paths: { [studio.id]: '/Users/x/demo' } });
+  const t2 = await a.createTask({ title: 'API 2', project: 'Demo', staff: be.id });
+  assert.deepEqual(hosts, ['192.168.1.20:6767']);
+  assert.equal(remote.calls[0][1].cwd, '/Users/x/demo');
+  assert.equal(l.get('task', t2.id).machine, studio.id);
+  await a.reply(t2.id, 'hello');
+  assert.deepEqual(remote.calls.at(-1), ['send', { agentId: l.get('thread', l.get('task', t2.id).threadId).agentId, text: 'hello' }]);
+
+  const r = team.roster();
+  const feRow = r.staff.find((s) => s.id === fe.id);
+  assert.equal(feRow.counts.working, 1);
+  assert.equal(feRow.machineName, l.get('machine', 'local').name);
+  const studioRow = r.machines.find((m) => m.id === studio.id);
+  assert.equal(studioRow.running, 1);
+  assert.deepEqual(studioRow.staff.map((s) => s.name), ['后端工程师']);
+
+  assert.throws(() => team.removeStaff(fe.id), /still has 1 open task/);
+  assert.throws(() => team.removeMachine(studio.id), /still runs 1 agent/);
+  assert.throws(() => team.removeMachine('local'), /cannot be removed/);
+  await a.drop(t.id);
+  team.removeStaff(fe.id);
+  assert.equal(l.get('staff', fe.id), null);
+  team.updateMachine(studio.id, { capacity: 4, name: 'studio-2' });
+  assert.equal(l.get('machine', studio.id).name, 'studio-2');
+});
+
+test('finding agents looks only at commands and folders', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autodos-home-'));
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'autodos-bin-'));
+  fs.mkdirSync(path.join(home, '.codex'));
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\n');
+  const found = Object.fromEntries(detectAgents({ home, env: { PATH: bin } }).map((x) => [x.kind, x]));
+  assert.equal(found.claude.installed, true);
+  assert.equal(found.claude.used, false);
+  assert.equal(found.codex.installed, false);
+  assert.equal(found.codex.used, true);
+  assert.equal(found.hermes.installed, false);
+});

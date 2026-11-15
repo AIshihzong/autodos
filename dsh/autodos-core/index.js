@@ -16,6 +16,7 @@ import { board, boardText, taskDetail } from './lib/board.js';
 import { Autodos } from './lib/actions.js';
 import { createPaseo } from './lib/paseo.js';
 import { createGit, runCheck } from './lib/land.js';
+import { Team, detectAgents } from './lib/team.js';
 
 export const name = 'autodos-core';
 export const inject = ['tools'];
@@ -58,7 +59,7 @@ const PROJECT_FIELDS = {
 };
 
 /** The tools the chief of staff (any DSH agent) can call. Exported for tests. Permission requests are not among them. */
-export function tools(ledger, autodos = new Autodos(ledger)) {
+export function tools(ledger, autodos = new Autodos(ledger), team = new Team(ledger)) {
   const brief = (t) => ({ id: t.id, number: t.number, title: t.title, state: t.state, branch: t.branch || null, waitingFor: t.waitingFor || null });
   return [
     {
@@ -110,6 +111,22 @@ export function tools(ledger, autodos = new Autodos(ledger)) {
       },
     },
     {
+      name: 'autodos_team',
+      description: 'The team: each staff member (role, which agent it runs, which machine, what it is doing now, what it spent) and each machine (where agents run, how many are running, which agents are installed). Use it to pick who should do a task.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output: { schema: OBJECT, render: (_args, value) => asText(value.text) },
+      async execute() {
+        const r = team.roster();
+        const text = [
+          'Staff:',
+          ...r.staff.map((s) => `- ${s.name}${s.role ? ` (${s.role})` : ''}: ${s.runtime || 'auto'} on ${s.machineName}; working ${s.counts.working}, waiting ${s.counts.waiting}, stuck ${s.counts.stuck}, queued ${s.counts.queued}`),
+          'Machines:',
+          ...r.machines.map((m) => `- ${m.name}${m.local ? ' (this machine)' : ` (${m.paseoHost || 'no Paseo address'})`}: ${m.running} running${m.agents ? `; agents: ${m.agents.filter((a) => a.installed).map((a) => a.name).join(', ') || 'none found'}` : ''}`),
+        ].join('\n');
+        return clean({ ...r, text });
+      },
+    },
+    {
       name: 'autodos_create_project',
       description: 'Add a project: a name and the absolute path of its git repository on this machine.',
       parameters: { type: 'object', properties: PROJECT_FIELDS, required: ['name', 'path'], additionalProperties: false },
@@ -139,6 +156,7 @@ export function tools(ledger, autodos = new Autodos(ledger)) {
           title: str,
           description: str,
           project: { type: 'string', description: 'Project id or name.' },
+          staff: { type: 'string', description: 'Staff member id or name to do it (see autodos_team). Their agent, machine and instructions are used.' },
           provider: { type: 'string', description: 'claude (default) or codex.' },
           start: { type: 'boolean', description: 'Start an agent now (default true).' },
         },
@@ -173,8 +191,14 @@ export function tools(ledger, autodos = new Autodos(ledger)) {
 }
 
 /** HTTP routes for the panel, under /api/autodos. Exported for tests. Actions here are the person's own. */
-export function routes(ledger, autodos = new Autodos(ledger)) {
+export function routes(ledger, autodos = new Autodos(ledger), team = new Team(ledger)) {
   const act = {
+    create_staff: ({ action: _a, ...b }) => team.createStaff(b),
+    update_staff: ({ action: _a, staff, ...patch }) => team.updateStaff(staff, patch),
+    remove_staff: (b) => team.removeStaff(b.staff),
+    create_machine: ({ action: _a, ...b }) => team.createMachine(b),
+    update_machine: ({ action: _a, machine, ...patch }) => team.updateMachine(machine, patch),
+    remove_machine: (b) => team.removeMachine(b.machine),
     create_project: (b) => autodos.createProject(b),
     update_project: ({ project, action: _a, ...patch }) => autodos.updateProject(project, patch),
     create_task: (b) => autodos.createTask(b),
@@ -207,7 +231,21 @@ export function routes(ledger, autodos = new Autodos(ledger)) {
       path: '/api/autodos/projects',
       methods: ['GET'],
       async fetch() {
-        return json({ ok: true, projects: ledger.list('project').map((p) => ({ id: p.id, name: p.name, path: p.path || null, check: p.check || null, budgetUsd: p.budgetUsd || null, base: p.base || null })), execution: Boolean(autodos.paseo), budgetUsd: autodos.budgetUsd });
+        return json({
+          ok: true,
+          projects: ledger.list('project').map((p) => ({ id: p.id, name: p.name, path: p.path || null, check: p.check || null, budgetUsd: p.budgetUsd || null, base: p.base || null })),
+          staff: ledger.list('staff').map((s) => ({ id: s.id, name: s.name, role: s.role || '', runtime: s.runtime || null, machine: s.machine || 'local' })),
+          machines: ledger.list('machine').map((m) => ({ id: m.id, name: m.name, local: Boolean(m.local) })),
+          execution: Boolean(autodos.paseo),
+          budgetUsd: autodos.budgetUsd,
+        });
+      },
+    },
+    {
+      path: '/api/autodos/team',
+      methods: ['GET'],
+      async fetch() {
+        return json({ ok: true, ...clean(team.roster()) });
       },
     },
     {
@@ -237,7 +275,7 @@ export function apply(ctx, config = {}) {
   const log = (...a) => console.log('[autodos-core]', ...a);
   const ledger = openLedger(config, { log });
   const paseo = config.paseo === false ? null : createPaseo(config.paseo || {});
-  const autodos = new Autodos(ledger, { paseo, git: createGit(), check: runCheck, provider: config.provider, mode: config.mode, budgetUsd: config.budgetUsd, budgetStepUsd: config.budgetStepUsd, log });
+  const autodos = new Autodos(ledger, { paseo, paseoFor: paseo ? (host) => createPaseo({ ...(config.paseo || {}), host }) : null, git: createGit(), check: runCheck, provider: config.provider, mode: config.mode, budgetUsd: config.budgetUsd, budgetStepUsd: config.budgetStepUsd, log });
   // Follow the running agents in the background, so the board moves without anyone asking.
   const every = Math.max(2000, Number(config.syncMs) || 5000);
   const timer = paseo ? setInterval(() => autodos.sync().catch((e) => log(`sync: ${e.message}`)), every) : null;
@@ -247,12 +285,18 @@ export function apply(ctx, config = {}) {
     ledger.close();
   });
 
-  for (const t of tools(ledger, autodos)) ctx.tools.register(t);
+  const team = new Team(ledger);
+  try {
+    team.noteAgents('local', detectAgents());
+  } catch (e) {
+    log(`could not look for agents: ${e.message}`);
+  }
+  for (const t of tools(ledger, autodos, team)) ctx.tools.register(t);
 
   ctx.inject?.(['connection'], (scope) => {
     const reg = scope.connection?.fetch?.register;
     if (typeof reg !== 'function') return;
-    for (const r of routes(ledger, autodos)) {
+    for (const r of routes(ledger, autodos, team)) {
       const dispose = reg.call(scope.connection.fetch, { ...r, requestBody: 'buffered' });
       if (typeof dispose === 'function') scope.effect?.(() => dispose);
     }
