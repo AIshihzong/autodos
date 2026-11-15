@@ -1,0 +1,7 @@
+# autodos-core: the Autodos ledger (SQLite event log), the status board tools
+# (autodos_board, autodos_task) for every agent, and the Tasks panel in the sidebar.
+# Override in your profile's cordis.patch.yml by id; an override replaces the whole config.
+- insert:
+    - id: autodos-core
+      name: 'dsh-autodos-core'
+      config: {}
