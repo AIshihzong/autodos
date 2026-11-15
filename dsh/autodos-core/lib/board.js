@@ -84,6 +84,7 @@ export function taskDetail(ledger, taskId) {
   if (!t) return null;
   return {
     task: t,
+    project: t.projectId ? ledger.get('project', t.projectId) : null,
     threads: ledger.list('thread', { where: (x) => x.taskId === t.id }),
     outputs: ledger.list('output', { where: (x) => x.taskId === t.id }),
     decisions: ledger.list('decision', { where: (x) => x.taskId === t.id }),
