@@ -1163,8 +1163,8 @@ window.__ModuleLoader__.load({
       ctx.slots.inject('conversation.hero.brand.mark', () =>
         ctx.slots.register({ name: 'conversation.hero.brand.mark' }, ({ size = 34, className }) => h('span', { className }, h(Logo, { size }))));
       ctx.effect(() => brandDocument(), 'autodos: title and icon');
-      if (ctx.layout) openOnStart(ctx);
-      else if (typeof ctx.inject === 'function') ctx.inject(['layout'], (c) => openOnStart(c));
+      // The layout service is optional here: read it only inside its own inject scope.
+      if (typeof ctx.inject === 'function') ctx.inject(['layout'], (c) => openOnStart(c));
     }
 
     function BrandName({ t }) {
