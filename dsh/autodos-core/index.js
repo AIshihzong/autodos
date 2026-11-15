@@ -16,7 +16,7 @@ import { board, boardText, taskDetail } from './lib/board.js';
 import { Autodos } from './lib/actions.js';
 import { createPaseo } from './lib/paseo.js';
 import { createGit, runCheck } from './lib/land.js';
-import { Team, detectAgents } from './lib/team.js';
+import { detectAgents } from './lib/team.js';
 
 export const name = 'autodos-core';
 export const inject = ['tools'];
@@ -59,7 +59,7 @@ const PROJECT_FIELDS = {
 };
 
 /** The tools the chief of staff (any DSH agent) can call. Exported for tests. Permission requests are not among them. */
-export function tools(ledger, autodos = new Autodos(ledger), team = new Team(ledger)) {
+export function tools(ledger, autodos = new Autodos(ledger), team = autodos.team) {
   const brief = (t) => ({ id: t.id, number: t.number, title: t.title, state: t.state, branch: t.branch || null, waitingFor: t.waitingFor || null });
   return [
     {
@@ -112,16 +112,18 @@ export function tools(ledger, autodos = new Autodos(ledger), team = new Team(led
     },
     {
       name: 'autodos_team',
-      description: 'The team: each staff member (role, which agent it runs, which machine, what it is doing now, what it spent) and each machine (where agents run, how many are running, which agents are installed). Use it to pick who should do a task.',
+      description: 'The team in three layers: staff (roles: who does what, which kind of agent they prefer, what they are doing now), agents (Claude Code or Codex on a given machine: ready, busy, out of quota or switched off) and machines (where agents run). A task goes to a staff member and a free agent is picked when it starts. Use it to pick who should do a task.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: { schema: OBJECT, render: (_args, value) => asText(value.text) },
       async execute() {
         const r = team.roster();
         const text = [
           'Staff:',
-          ...r.staff.map((s) => `- ${s.name}${s.role ? ` (${s.role})` : ''}: ${s.runtime || 'auto'} on ${s.machineName}; working ${s.counts.working}, waiting ${s.counts.waiting}, stuck ${s.counts.stuck}, queued ${s.counts.queued}`),
+          ...r.staff.map((s) => `- ${s.name}${s.role ? ` (${s.role})` : ''}: ${s.agentName ? `always ${s.agentName}` : `prefers ${s.prefer}`}; working ${s.counts.working}, waiting ${s.counts.waiting}, stuck ${s.counts.stuck}, queued ${s.counts.queued}`),
+          'Agents:',
+          ...r.agents.map((a) => `- ${a.name}: ${a.status}${a.status === 'limited' ? ` until ${a.limitedUntil}` : ''}, running ${a.running}/${a.capacity || 2}`),
           'Machines:',
-          ...r.machines.map((m) => `- ${m.name}${m.local ? ' (this machine)' : ` (${m.paseoHost || 'no Paseo address'})`}: ${m.running} running${m.agents ? `; agents: ${m.agents.filter((a) => a.installed).map((a) => a.name).join(', ') || 'none found'}` : ''}`),
+          ...r.machines.map((m) => `- ${m.name}${m.local ? ' (this machine)' : ` (${m.paseoHost || 'no Paseo address'})`}: ${m.running} running${m.capacity ? ` of ${m.capacity}` : ''}`),
         ].join('\n');
         return clean({ ...r, text });
       },
@@ -147,7 +149,7 @@ export function tools(ledger, autodos = new Autodos(ledger), team = new Team(led
     {
       name: 'autodos_create_task',
       description:
-        'File a task in a project. With start (the default), an agent (Claude Code unless provider says otherwise) starts on it ' +
+        'File a task in a project. With start (the default), a free agent (the kind the staff member prefers, Claude Code by default) starts on it ' +
         'at once in its own worktree and branch autodos/<number>; it commits there and never pushes or merges. ' +
         'Write the description as the brief the agent will work from: the goal, the constraints, how to check it.',
       parameters: {
@@ -156,8 +158,8 @@ export function tools(ledger, autodos = new Autodos(ledger), team = new Team(led
           title: str,
           description: str,
           project: { type: 'string', description: 'Project id or name.' },
-          staff: { type: 'string', description: 'Staff member id or name to do it (see autodos_team). Their agent, machine and instructions are used.' },
-          provider: { type: 'string', description: 'claude (default) or codex.' },
+          staff: { type: 'string', description: 'Staff member id or name to do it (see autodos_team). Their instructions are used, and a free agent of the kind they prefer runs it.' },
+          provider: { type: 'string', description: 'Only claude or only codex for this task; leave it out to follow the staff member.' },
           start: { type: 'boolean', description: 'Start an agent now (default true).' },
         },
         required: ['title', 'project'],
@@ -191,7 +193,7 @@ export function tools(ledger, autodos = new Autodos(ledger), team = new Team(led
 }
 
 /** HTTP routes for the panel, under /api/autodos. Exported for tests. Actions here are the person's own. */
-export function routes(ledger, autodos = new Autodos(ledger), team = new Team(ledger)) {
+export function routes(ledger, autodos = new Autodos(ledger), team = autodos.team) {
   const act = {
     create_staff: ({ action: _a, ...b }) => team.createStaff(b),
     update_staff: ({ action: _a, staff, ...patch }) => team.updateStaff(staff, patch),
@@ -199,6 +201,9 @@ export function routes(ledger, autodos = new Autodos(ledger), team = new Team(le
     create_machine: ({ action: _a, ...b }) => team.createMachine(b),
     update_machine: ({ action: _a, machine, ...patch }) => team.updateMachine(machine, patch),
     remove_machine: (b) => team.removeMachine(b.machine),
+    add_agent: (b) => team.addAgent(b.machine, b.kind),
+    update_agent: ({ action: _a, agent, ...patch }) => team.updateAgent(agent, patch),
+    remove_agent: (b) => team.removeAgent(b.agent),
     create_project: (b) => autodos.createProject(b),
     update_project: ({ project, action: _a, ...patch }) => autodos.updateProject(project, patch),
     create_task: (b) => autodos.createTask(b),
@@ -285,7 +290,7 @@ export function apply(ctx, config = {}) {
     ledger.close();
   });
 
-  const team = new Team(ledger);
+  const team = autodos.team;
   try {
     team.noteAgents('local', detectAgents());
   } catch (e) {

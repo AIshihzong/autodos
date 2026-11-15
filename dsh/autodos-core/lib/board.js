@@ -5,6 +5,8 @@ import { TASK_STATES } from './store.js';
 import { WAITING_TEXT } from './import.js';
 
 /** Map an old Autodos todo phase (and its flags) to a board state. */
+const KIND_NAMES = { claude: 'Claude Code', codex: 'Codex', openclaw: 'OpenClaw', hermes: 'Hermes' };
+
 export function taskState(t) {
   const p = t.phase;
   if (p === 'closed') return 'dropped';
@@ -35,6 +37,7 @@ export function board(ledger, { open = true, projectId, goalId, limit = 200 } = 
   const goals = new Map(ledger.list('goal').map((g) => [g.id, g]));
   const staff = new Map(ledger.list('staff').map((s) => [s.id, s]));
   const machines = new Map(ledger.list('machine').map((m) => [m.id, m]));
+  const agents = new Map(ledger.list('agent').map((a) => [a.id, a]));
   const outputs = new Map();
   for (const o of ledger.list('output')) {
     if (!o.taskId) continue;
@@ -53,6 +56,7 @@ export function board(ledger, { open = true, projectId, goalId, limit = 200 } = 
   const rows = tasks.map((t) => {
     const s = t.staffId ? staff.get(t.staffId) : null;
     const m = t.machine ? machines.get(t.machine) : null;
+    const a = t.agentRef ? agents.get(t.agentRef) : null;
     const g = t.goalId ? goals.get(t.goalId) : null;
     const p = t.projectId ? projects.get(t.projectId) : null;
     return {
@@ -61,7 +65,7 @@ export function board(ledger, { open = true, projectId, goalId, limit = 200 } = 
       title: t.title,
       goal: g ? { id: g.id, name: g.name } : null,
       project: p ? { id: p.id, name: p.name } : null,
-      who: { staff: s ? s.name : null, staffId: t.staffId || null, machine: m ? m.name : t.machine || null, runtime: t.runtime || s?.runtime || null },
+      who: { staff: s ? s.name : null, staffId: t.staffId || null, machine: m ? m.name : t.machine || null, runtime: t.runtime || s?.runtime || null, agent: a ? KIND_NAMES[a.kind] || a.kind : t.runtime ? KIND_NAMES[t.runtime] || t.runtime : null },
       state: t.state,
       stuck: str(t.stuck),
       waitingFor: t.state === 'waiting_you' ? str(t.waitingFor) || (t.waitingKind ? null : str(decisions.get(t.id)?.question)) || (t.waitingKind ? WAITING_TEXT[t.waitingKind] || null : 'Needs you') : t.state === 'failed' ? str(t.waitingFor) || 'Reply or retry' : null,
@@ -97,7 +101,7 @@ export function boardText(b) {
   if (!b.rows.length) return 'No open tasks.';
   const label = { waiting_you: 'WAITING ON YOU', stuck: 'STUCK', failed: 'FAILED', working: 'working', review: 'in review', queued: 'queued', landing: 'landing', done: 'done', dropped: 'dropped' };
   const lines = b.rows.map((r) => {
-    const who = [r.who.machine, r.who.staff].filter(Boolean).join(' · ') || 'unassigned';
+    const who = [r.who.staff, r.who.agent && r.who.machine ? `${r.who.agent} @ ${r.who.machine}` : r.who.machine].filter(Boolean).join(' · ') || 'unassigned';
     const where = r.goal?.name || r.project?.name || 'no project';
     const extra = (r.waitingFor ? ` — needs: ${r.waitingFor}` : '') + (r.stuck ? ` — stuck: ${r.stuck.split('\n')[0].slice(0, 160)}` : '');
     return `- [${label[r.state] || r.state}] ${r.number ? `#${r.number} ` : ''}${r.title} (${where}; ${who}; last moved ${r.lastProgressAt})${extra}`;

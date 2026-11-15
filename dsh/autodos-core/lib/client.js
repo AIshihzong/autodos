@@ -23,6 +23,31 @@ window.__ModuleLoader__.load({
         sec_tasks: '任务',
         sec_staff: '员工',
         sec_machines: '机器',
+        sec_agents: 'Agent',
+        powered: '由 DeepSeek Harness 驱动',
+        staff_prefer: '优先用哪种 agent',
+        staff_pin: '固定人选（可不选）',
+        staff_pin_none: '不固定，派活时自动挑',
+        staff_note: '员工是岗位，不绑机器。派活时会挑一个有空、有额度的 agent 来做，优先用你选的那种。',
+        staff_hint: '员工是岗位：谁负责什么。具体谁来干，派活时自动挑 agent。',
+        staff_always: '固定：{0}',
+        staff_prefers: '优先：{0}',
+        m_has: '这台机器装了',
+        a_ready: '可用',
+        a_off: '已停用',
+        a_limited: '额度用完，{0} 恢复',
+        a_missing: '没装',
+        a_cannot: '暂不能接活',
+        a_cannot_note: 'Paseo 还不能启动它，先在这里列出来',
+        a_declared: '手动添加',
+        a_clear: '手动恢复',
+        a_cap: '同时',
+        a_turn_on: '启用',
+        a_turn_off: '停用',
+        a_none: '这台机器还没有 agent',
+        a_add: '添加 agent',
+        a_notinst: '没装：{0}',
+        w_agent: '等空闲的 agent',
         add_staff: '添加员工',
         add_machine: '添加机器',
         edit: '编辑',
@@ -156,6 +181,31 @@ window.__ModuleLoader__.load({
         sec_tasks: 'Tasks',
         sec_staff: 'Staff',
         sec_machines: 'Machines',
+        sec_agents: 'Agents',
+        powered: 'Powered by DeepSeek Harness',
+        staff_prefer: 'Preferred agent',
+        staff_pin: 'Always use (optional)',
+        staff_pin_none: 'Not fixed: pick one per task',
+        staff_note: 'Staff are roles, not machines. Each task goes to a free agent with quota left, the preferred kind first.',
+        staff_hint: 'Staff are roles: who is responsible for what. The agent doing the work is picked per task.',
+        staff_always: 'Always: {0}',
+        staff_prefers: 'Prefers: {0}',
+        m_has: 'Installed there',
+        a_ready: 'Ready',
+        a_off: 'Off',
+        a_limited: 'Out of quota until {0}',
+        a_missing: 'Not installed',
+        a_cannot: 'Cannot take tasks yet',
+        a_cannot_note: 'Paseo cannot start it yet; listed for now',
+        a_declared: 'added by hand',
+        a_clear: 'Mark as back',
+        a_cap: 'At once',
+        a_turn_on: 'Turn on',
+        a_turn_off: 'Turn off',
+        a_none: 'No agents on this machine yet',
+        a_add: 'Add agent',
+        a_notinst: 'Not installed: {0}',
+        w_agent: 'Waiting for a free agent',
         add_staff: 'Add staff',
         add_machine: 'Add machine',
         edit: 'Edit',
@@ -326,6 +376,27 @@ window.__ModuleLoader__.load({
 .ad-chip{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:7px;font-size:11px;background:var(--ad-surface-2);color:var(--ad-ink-2);border:1px solid var(--ad-line-soft);white-space:nowrap}
 .ad-chip.ok{color:var(--ad-brand);background:var(--ad-brand-soft);border-color:transparent}
 .ad-chip.off{color:var(--ad-ink-4)}
+.ad-powered{font-size:11px;color:var(--ad-ink-4);white-space:nowrap}
+@media (max-width:640px){.ad-powered{display:none}}
+.ad-chip.pick{cursor:pointer;height:28px;padding:0 12px;font-size:12px}
+.ad-chip.st-ready{color:var(--ad-brand);background:var(--ad-brand-soft);border-color:transparent}
+.ad-chip.st-limited{color:var(--ad-amber);background:color-mix(in srgb,var(--ad-amber) 12%,transparent);border-color:transparent}
+.ad-chip.st-off,.ad-chip.st-missing,.ad-chip.st-cannot{color:var(--ad-ink-4)}
+.ad-stack{display:flex;flex-direction:column;gap:14px;max-width:980px}
+.ad-machine{border:1px solid var(--ad-line);border-radius:14px;background:var(--ad-surface);padding:14px;display:flex;flex-direction:column;gap:4px}
+.ad-machine-head{display:flex;gap:10px;align-items:center;padding-bottom:10px;margin-bottom:4px;border-bottom:1px solid var(--ad-line-soft)}
+.ad-machine-head b{font-size:14px}
+.ad-machine-foot{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;padding-top:6px}
+.ad-agent{display:flex;flex-direction:column;gap:4px;padding:8px 4px;border-radius:10px}
+.ad-agent+.ad-agent{border-top:1px dashed var(--ad-line-soft)}
+.ad-agent.dim .ad-avatar{opacity:.55}
+.ad-agent-main{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.ad-agent-name{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ad-agent-name b{font-size:13.5px}
+.ad-agent-acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.ad-cap{display:inline-flex;gap:6px;align-items:center;font-size:12px}
+.ad-cap .ad-select{width:auto;height:30px;padding:0 24px 0 8px}
+.ad-avatar.sm{width:28px;height:28px;border-radius:8px;font-size:13px}
 .ad-stats{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--ad-ink-3)}
 .ad-stats b{color:var(--ad-ink);font-variant-numeric:tabular-nums;margin-right:3px}
 .ad-mini{display:flex;flex-direction:column;gap:2px}
@@ -574,6 +645,8 @@ window.__ModuleLoader__.load({
     const Dot = ({ state }) => h('span', { className: `ad-dot${state === 'working' || state === 'landing' ? ' live' : ''}`, style: { '--tone': TONE[state] } });
     const Tag = ({ t, state }) => h('span', { className: 'ad-tag', style: { '--tone': TONE[state] } }, h(Dot, { state }), t(`s_${state}`));
     const host = (m) => (m ? String(m).replace(/\.local$/, '') : m);
+    // Who, with what, where: "后端工程师 · Claude Code @ Mac-mini".
+    const whoText = (w) => [w.staff, w.agent && w.machine ? `${w.agent} @ ${host(w.machine)}` : host(w.machine)].filter(Boolean).join(' · ');
     const num = (r) => (r.number != null ? `#${r.number}` : '');
 
     const Icon = {
@@ -586,7 +659,7 @@ window.__ModuleLoader__.load({
 
     function Card({ t, r, onOpen, selected }) {
       const { label, note } = needs(t, r);
-      const who = [r.who.staff, host(r.who.machine)].filter(Boolean).join(' · ');
+      const who = whoText(r.who);
       return h('button', { className: `ad-card${selected ? ' sel' : ''}`, onClick: () => onOpen(r.id), style: { '--tone': TONE[r.state] } },
         h('div', { className: 'ad-card-title' }, h(Dot, { state: r.state }), h('span', null, r.title)),
         h('div', { className: 'ad-meta' },
@@ -624,7 +697,7 @@ window.__ModuleLoader__.load({
           const { label, note } = needs(t, r);
           return h('button', { key: r.id, className: 'ad-row', onClick: () => onOpen(r.id) },
             h('div', null, h('div', { style: { fontWeight: 560 } }, `${num(r)} ${r.title}`), h('div', { className: 'ad-muted', style: { fontSize: 11 } }, r.goal?.name || r.project?.name || '')),
-            h('div', { className: 'ad-muted' }, [r.who.staff, r.who.machine].filter(Boolean).join(' · ') || t('unassigned')),
+            h('div', { className: 'ad-muted' }, whoText(r.who) || t('unassigned')),
             h('div', null, h(Tag, { t, state: r.state })),
             h('div', null, label || note ? h('div', { className: 'ad-need' }, label ? h('b', null, label) : null, label && note ? ' · ' : '', note) : null, r.stuck ? h('div', { className: 'ad-stuck' }, r.stuck.split('\n')[0]) : null),
             h('div', { className: 'ad-muted', title: r.lastProgressAt }, ago(r.lastProgressAt)));
@@ -700,7 +773,7 @@ window.__ModuleLoader__.load({
 
     function AutodosPage({ t }) {
       useEffect(ensureStyle, []);
-      const [section, setSectionState] = useState(() => store.get('section', 'tasks'));
+      const [section, setSectionState] = useState(() => ({ machines: 'agents' })[store.get('section', 'tasks')] || store.get('section', 'tasks'));
       const setSection = (v) => (setSectionState(v), store.set('section', v));
       const [open, setOpen] = useState(null);
       const [inboxN, setInboxN] = useState(0);
@@ -709,10 +782,12 @@ window.__ModuleLoader__.load({
         h('div', { className: 'ad-topline' },
           h('div', { className: 'ad-brand' }, h(Logo), h('b', null, 'Autodos'), h('span', null, t('brand_sub'))),
           h('nav', { className: 'ad-nav' },
-            ['tasks', 'staff', 'machines'].map((v) => h('button', { key: v, className: section === v ? 'on' : '', 'aria-current': section === v ? 'page' : undefined, onClick: () => setSection(v) },
-              t(`sec_${v}`), v === 'tasks' && inboxN ? h('span', { className: 'n' }, inboxN) : null)))),
+            ['tasks', 'staff', 'agents'].map((v) => h('button', { key: v, className: section === v ? 'on' : '', 'aria-current': section === v ? 'page' : undefined, onClick: () => setSection(v) },
+              t(`sec_${v}`), v === 'tasks' && inboxN ? h('span', { className: 'n' }, inboxN) : null))),
+          h('span', { className: 'ad-grow' }),
+          h('span', { className: 'ad-powered' }, t('powered'))),
         section === 'staff' ? h(StaffPage, { t, onOpen: setOpen, tick })
-          : section === 'machines' ? h(MachinesPage, { t, onOpen: setOpen, tick })
+          : section === 'agents' ? h(AgentsPage, { t, onOpen: setOpen, tick })
           : h(TasksPage, { t, open, setOpen, onCounts: setInboxN, key: tick }),
         open ? h(Drawer, { t, id: open, onClose: () => setOpen(null), onChanged: () => setTick((x) => x + 1) }) : null);
     }
@@ -762,17 +837,22 @@ window.__ModuleLoader__.load({
 
     const Field = ({ label, children }) => h('div', { className: 'ad-field' }, h('label', null, label), children);
 
-    function StaffForm({ t, staff, machines, onDone, onCancel }) {
-      const [f, setF] = useState(() => ({ name: staff?.name || '', role: staff?.role || '', runtime: staff?.runtime || 'claude', machine: staff?.machine || 'local', instructions: staff?.instructions || '' }));
+    const PREFS = ['auto', 'claude', 'codex'];
+    const prefText = (t, s) => (s.agentName ? fill(t('staff_always'), s.agentName) : fill(t('staff_prefers'), t(`rt_${PREFS.includes(s.prefer || s.runtime) ? s.prefer || s.runtime : 'auto'}`)));
+
+    function StaffForm({ t, staff, agents, onDone, onCancel }) {
+      const [f, setF] = useState(() => ({ name: staff?.name || '', role: staff?.role || '', prefer: PREFS.includes(staff?.runtime) ? staff.runtime : 'auto', agent: staff?.agent || '', instructions: staff?.instructions || '' }));
       const { busy, error, run } = useAction(onDone);
       const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
       const save = () => run(staff ? { action: 'update_staff', staff: staff.id, ...f } : { action: 'create_staff', ...f });
-      return h(Modal, { t, title: staff ? `${t('edit')} · ${staff.name}` : t('add_staff'), onCancel, onSave: save, busy, canSave: Boolean(f.name.trim()), error },
+      const pickable = (agents || []).filter((a) => a.status !== 'cannot' && a.status !== 'missing');
+      return h(Modal, { t, title: staff ? `${t('edit')} · ${staff.name}` : t('add_staff'), onCancel, onSave: save, busy, canSave: Boolean(f.name.trim()), error, note: t('staff_note') },
         h(Field, { label: t('staff_name') }, h('input', { className: 'ad-input', value: f.name, placeholder: t('staff_name_ph'), onChange: set('name'), autoFocus: true })),
         h(Field, { label: t('staff_role') }, h('input', { className: 'ad-input', value: f.role, placeholder: t('staff_role_ph'), onChange: set('role') })),
         h('div', { className: 'ad-bar' },
-          h(Field, { label: t('staff_runtime') }, h('select', { className: 'ad-select', value: f.runtime, onChange: set('runtime') }, ['claude', 'codex', 'auto'].map((r) => h('option', { key: r, value: r }, t(`rt_${r}`))))),
-          h(Field, { label: t('staff_machine') }, h('select', { className: 'ad-select', value: f.machine, onChange: set('machine') }, (machines || []).map((m) => h('option', { key: m.id, value: m.id }, m.local ? `${host(m.name)} · ${t('m_local')}` : host(m.name)))))),
+          h(Field, { label: t('staff_prefer') }, h('select', { className: 'ad-select', value: f.prefer, disabled: Boolean(f.agent), onChange: set('prefer') }, PREFS.map((r) => h('option', { key: r, value: r }, t(`rt_${r}`))))),
+          h(Field, { label: t('staff_pin') }, h('select', { className: 'ad-select', value: f.agent, onChange: set('agent') },
+            h('option', { value: '' }, t('staff_pin_none')), pickable.map((a) => h('option', { key: a.id, value: a.id }, a.name))))),
         h(Field, { label: t('staff_instr') }, h('textarea', { className: 'ad-textarea', style: { minHeight: 100 }, value: f.instructions, placeholder: t('staff_instr_ph'), onChange: set('instructions') })));
     }
 
@@ -784,7 +864,7 @@ window.__ModuleLoader__.load({
       const done = () => (setEditing(null), load());
       return h(React.Fragment, null,
         h('div', { className: 'ad-head' },
-          data ? h('div', { className: 'ad-sum' }, h('span', null, `${data.staff.length} ${t('sec_staff')}`)) : null,
+          data ? h('div', { className: 'ad-sum' }, h('span', null, `${data.staff.length} ${t('sec_staff')}`), h('span', { className: 'ad-muted' }, t('staff_hint'))) : null,
           h('span', { className: 'ad-grow' }),
           h('button', { className: 'ad-btn primary', onClick: () => setEditing('new') }, h(Icon.plus), t('add_staff'))),
         error || actError ? h('div', { className: 'ad-err' }, error || actError) : null,
@@ -796,8 +876,7 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'ad-avatar', style: { '--tone': colorOf(s) } }, String(s.name || '?').slice(0, 1)),
                 h('div', { style: { minWidth: 0, flex: 1 } }, h('b', null, s.name), s.role ? h('div', { className: 'ad-muted', style: { fontSize: 12 } }, s.role) : null)),
               h('div', { className: 'ad-chips' },
-                h('span', { className: 'ad-chip ok' }, t(`rt_${['claude', 'codex', 'auto'].includes(s.runtime) ? s.runtime : 'auto'}`)),
-                h('span', { className: 'ad-chip' }, host(s.machineName) || t('m_local')),
+                h('span', { className: 'ad-chip ok' }, prefText(t, s)),
                 s.spentUsd ? h('span', { className: 'ad-chip' }, `${t('spent')} $${s.spentUsd.toFixed(2)}`) : null),
               h('div', { className: 'ad-stats' }, ['working', 'waiting', 'stuck', 'queued', 'done'].map((k) => h('span', { key: k }, h('b', null, s.counts[k]), t(`c_count_${k}`)))),
               h(TaskMini, { t, tasks: s.tasks, onOpen }),
@@ -806,52 +885,93 @@ window.__ModuleLoader__.load({
                 h('button', { className: 'ad-btn', onClick: () => setEditing(s) }, t('edit')),
                 h('span', { className: 'ad-grow' }),
                 h(Confirmable, { t, busy, onConfirm: () => run({ action: 'remove_staff', staff: s.id }) })))))),
-        editing ? h(StaffForm, { t, staff: editing === 'new' ? null : editing, machines: data?.machines, onDone: done, onCancel: () => setEditing(null) }) : null);
+        editing ? h(StaffForm, { t, staff: editing === 'new' ? null : editing, agents: data?.agents, onDone: done, onCancel: () => setEditing(null) }) : null);
     }
 
+    const KINDS = ['claude', 'codex', 'openclaw', 'hermes'];
+    const KIND_TONE = { claude: '#c96442', codex: '#2b2b2f', openclaw: '#d6457a', hermes: '#7b5cd6' };
+    const hhmm = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
     function MachineForm({ t, machine, onDone, onCancel }) {
-      const [f, setF] = useState(() => ({ name: machine?.name || '', paseoHost: machine?.paseoHost || '', capacity: machine?.capacity || 2, notes: machine?.notes || '' }));
+      const [f, setF] = useState(() => ({ name: machine?.name || '', paseoHost: machine?.paseoHost || '', capacity: machine?.capacity || 2, notes: machine?.notes || '', agents: ['claude'] }));
       const { busy, error, run } = useAction(onDone);
       const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
       const local = machine?.local;
-      const save = () => run(machine ? { action: 'update_machine', machine: machine.id, ...f, ...(local ? { paseoHost: undefined } : {}) } : { action: 'create_machine', ...f });
+      const toggle = (k) => setF({ ...f, agents: f.agents.includes(k) ? f.agents.filter((x) => x !== k) : [...f.agents, k] });
+      const { agents: _a, ...fields } = f;
+      const save = () => run(machine ? { action: 'update_machine', machine: machine.id, ...fields, ...(local ? { paseoHost: undefined } : {}) } : { action: 'create_machine', ...f });
       return h(Modal, { t, title: machine ? `${t('edit')} · ${host(machine.name)}` : t('add_machine'), onCancel, onSave: save, busy, canSave: Boolean(f.name.trim() && (local || f.paseoHost.trim())), error, note: local ? null : t('m_remote_note') },
         h(Field, { label: t('m_name') }, h('input', { className: 'ad-input', value: f.name, placeholder: t('m_name_ph'), onChange: set('name'), autoFocus: true })),
         local ? null : h(Field, { label: t('m_host') }, h('input', { className: 'ad-input', value: f.paseoHost, placeholder: t('m_host_ph'), onChange: set('paseoHost') })),
+        machine ? null : h(Field, { label: t('m_has') }, h('div', { className: 'ad-chips' }, ['claude', 'codex'].map((k) => h('button', { key: k, type: 'button', className: `ad-chip pick${f.agents.includes(k) ? ' ok' : ''}`, onClick: () => toggle(k) }, `${f.agents.includes(k) ? '✓ ' : ''}${t(`rt_${k}`)}`)))),
         h(Field, { label: t('m_capacity') }, h('input', { className: 'ad-input', type: 'number', min: 1, max: 32, value: f.capacity, onChange: set('capacity'), style: { width: 120 } })),
         h(Field, { label: t('m_notes') }, h('textarea', { className: 'ad-textarea', value: f.notes, onChange: set('notes') })));
     }
 
-    function MachinesPage({ t, onOpen, tick }) {
+    function AgentRow({ t, a, busy, run, onOpen }) {
+      const st = a.status;
+      const stText = st === 'limited' ? fill(t('a_limited'), hhmm(a.limitedUntil)) : t(`a_${st}`);
+      const cap = Number(a.capacity) || 2;
+      return h('div', { className: `ad-agent${st === 'ready' ? '' : ' dim'}` },
+        h('div', { className: 'ad-agent-main' },
+          h('div', { className: 'ad-avatar sm', style: { '--tone': KIND_TONE[a.kind] || '#6b6b70' } }, (a.kindName || a.kind).slice(0, 1)),
+          h('div', { style: { minWidth: 0, flex: 1 } },
+            h('div', { className: 'ad-agent-name' }, h('b', null, a.kindName), h('span', { className: `ad-chip st-${st}` }, stText)),
+            h('div', { className: 'ad-muted', style: { fontSize: 12 } },
+              st === 'cannot' ? t('a_cannot_note')
+                : [`${a.running} / ${cap} ${t('m_running')}`, a.spentUsd ? `$${a.spentUsd.toFixed(2)} ${t('spent')}` : null, a.lastActiveAt ? ago(a.lastActiveAt) : null, a.detected === false ? t('a_declared') : null].filter(Boolean).join(' · '))),
+          st === 'cannot' ? null : h('div', { className: 'ad-agent-acts' },
+            st === 'limited' ? h('button', { className: 'ad-btn ghost', disabled: busy, onClick: () => run({ action: 'update_agent', agent: a.id, clearLimit: true }) }, t('a_clear')) : null,
+            h('label', { className: 'ad-muted ad-cap', title: t('a_cap') }, t('a_cap'),
+              h('select', { className: 'ad-select', value: cap, disabled: busy, onChange: (e) => run({ action: 'update_agent', agent: a.id, capacity: Number(e.target.value) }) }, [1, 2, 3, 4, 6, 8].map((n) => h('option', { key: n, value: n }, n)))),
+            h('button', { className: 'ad-btn', disabled: busy, onClick: () => run({ action: 'update_agent', agent: a.id, enabled: a.enabled === false }) }, a.enabled === false ? t('a_turn_on') : t('a_turn_off')),
+            a.detected === false && !a.running ? h('button', { className: 'ad-btn ghost', disabled: busy, onClick: () => run({ action: 'remove_agent', agent: a.id }) }, t('remove')) : null)),
+        st === 'limited' && a.limitNote ? h('div', { className: 'ad-muted', style: { fontSize: 11.5, paddingLeft: 42 } }, a.limitNote) : null,
+        a.tasks?.length ? h('div', { style: { paddingLeft: 36 } }, h(TaskMini, { t, tasks: a.tasks, onOpen })) : null);
+    }
+
+    function AgentsPage({ t, onOpen, tick }) {
       const { data, error, load } = useTeam();
       const [editing, setEditing] = useState(null);
+      const [adding, setAdding] = useState('');
       const { busy, error: actError, run } = useAction(load);
       useEffect(() => void load(), [tick, load]);
       const done = () => (setEditing(null), load());
+      const all = data?.agents || [];
+      const ready = all.filter((a) => a.status === 'ready').length;
+      const running = all.reduce((n, a) => n + a.running, 0);
       return h(React.Fragment, null,
         h('div', { className: 'ad-head' },
-          data ? h('div', { className: 'ad-sum' }, h('span', null, `${data.machines.length} ${t('sec_machines')}`), h('span', null, h('span', { className: 'ad-dot live', style: { '--tone': 'var(--ad-blue)' } }), `${data.machines.reduce((n, m) => n + m.running, 0)} ${t('m_running')}`)) : null,
+          data ? h('div', { className: 'ad-sum' },
+            h('span', null, `${all.filter((a) => a.status !== 'cannot').length} Agent`),
+            h('span', null, h('span', { className: 'ad-dot', style: { '--tone': 'var(--ad-brand)' } }), `${ready} ${t('a_ready')}`),
+            h('span', null, h('span', { className: 'ad-dot live', style: { '--tone': 'var(--ad-blue)' } }), `${running} ${t('m_running')}`),
+            h('span', null, `${data.machines.length} ${t('sec_machines')}`)) : null,
           h('span', { className: 'ad-grow' }),
           h('button', { className: 'ad-btn primary', onClick: () => setEditing('new') }, h(Icon.plus), t('add_machine'))),
         error || actError ? h('div', { className: 'ad-err' }, error || actError) : null,
         h('div', { className: 'ad-scroll' },
           !data ? h('div', { className: 'ad-muted' }, t('loading'))
-            : h('div', { className: 'ad-grid' }, data.machines.map((m) => h('article', { key: m.id, className: 'ad-person' },
-              h('div', { className: 'ad-person-head' },
-                h('div', { className: 'ad-avatar', style: { '--tone': m.local ? 'var(--ad-brand)' : '#3b6fd8' } }, h('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }, h('rect', { x: 3, y: 4, width: 18, height: 12, rx: 2 }), h('path', { d: 'M8 20h8M12 16v4' }))),
-                h('div', { style: { minWidth: 0, flex: 1 } }, h('b', null, host(m.name)), h('div', { className: 'ad-muted', style: { fontSize: 12 } }, m.local ? t('m_local') : m.paseoHost || m.host || m.executor || ''))),
-              h('div', { className: 'ad-stats' },
-                h('span', null, h('b', null, `${m.running}${m.capacity ? ` / ${m.capacity}` : ''}`), t('m_running')),
-                m.spentUsd ? h('span', null, h('b', null, `$${m.spentUsd.toFixed(2)}`), t('spent')) : null,
-                m.lastActiveAt ? h('span', null, ago(m.lastActiveAt)) : null),
-              m.agents ? h('div', null, h('div', { className: 'ad-muted', style: { fontSize: 11, marginBottom: 4 } }, t('m_agents')),
-                h('div', { className: 'ad-chips' }, m.agents.map((a) => h('span', { key: a.kind, className: `ad-chip${a.installed ? ' ok' : ' off'}`, title: a.used ? t('m_used') : '' }, `${a.installed ? '✓ ' : ''}${a.name}${!a.installed && a.used ? ` · ${t('m_used')}` : ''}`)))) : null,
-              m.staff.length ? h('div', null, h('div', { className: 'ad-muted', style: { fontSize: 11, marginBottom: 4 } }, t('m_staff')), h('div', { className: 'ad-chips' }, m.staff.map((s) => h('span', { key: s.id, className: 'ad-chip' }, s.name)))) : null,
-              h(TaskMini, { t, tasks: m.tasks, onOpen }),
-              h('div', { className: 'ad-actions' },
-                h('button', { className: 'ad-btn', onClick: () => setEditing(m) }, t('edit')),
-                h('span', { className: 'ad-grow' }),
-                m.local ? null : h(Confirmable, { t, busy, onConfirm: () => run({ action: 'remove_machine', machine: m.id }) })))))),
+            : h('div', { className: 'ad-stack' }, data.machines.map((m) => {
+              const missing = (m.found || []).filter((f) => !f.installed && !f.used && !m.agents.some((a) => a.kind === f.kind)).map((f) => f.name);
+              const addable = KINDS.filter((k) => ['claude', 'codex'].includes(k) && !m.agents.some((a) => a.kind === k));
+              return h('section', { key: m.id, className: 'ad-machine' },
+                h('div', { className: 'ad-machine-head' },
+                  h('div', { className: 'ad-avatar', style: { '--tone': m.local ? 'var(--ad-brand)' : '#3b6fd8' } }, h('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' }, h('rect', { x: 3, y: 4, width: 18, height: 12, rx: 2 }), h('path', { d: 'M8 20h8M12 16v4' }))),
+                  h('div', { style: { minWidth: 0, flex: 1 } },
+                    h('b', null, host(m.name)),
+                    h('div', { className: 'ad-muted', style: { fontSize: 12 } }, [m.local ? t('m_local') : m.paseoHost, `${m.running}${m.capacity ? ` / ${m.capacity}` : ''} ${t('m_running')}`, m.spentUsd ? `$${m.spentUsd.toFixed(2)} ${t('spent')}` : null].filter(Boolean).join(' · '))),
+                  h('button', { className: 'ad-btn', onClick: () => setEditing(m) }, t('edit')),
+                  m.local ? null : h(Confirmable, { t, busy, onConfirm: () => run({ action: 'remove_machine', machine: m.id }) })),
+                m.agents.length ? m.agents.map((a) => h(AgentRow, { key: a.id, t, a, busy, run, onOpen }))
+                  : h('div', { className: 'ad-muted', style: { padding: '6px 2px' } }, t('a_none')),
+                h('div', { className: 'ad-machine-foot' },
+                  missing.length ? h('span', { className: 'ad-muted' }, fill(t('a_notinst'), missing.join(', '))) : h('span'),
+                  h('span', { className: 'ad-grow' }),
+                  !m.local && addable.length ? (adding === m.id
+                    ? h(React.Fragment, null, addable.map((k) => h('button', { key: k, className: 'ad-btn', disabled: busy, onClick: () => (setAdding(''), run({ action: 'add_agent', machine: m.id, kind: k })) }, `+ ${t(`rt_${k}`)}`)), h('button', { className: 'ad-btn ghost', onClick: () => setAdding('') }, t('cancel')))
+                    : h('button', { className: 'ad-btn ghost', onClick: () => setAdding(m.id) }, h(Icon.plus), t('a_add'))) : null));
+            }))),
         editing ? h(MachineForm, { t, machine: editing === 'new' ? null : editing, onDone: done, onCancel: () => setEditing(null) }) : null);
     }
 
@@ -1032,6 +1152,59 @@ window.__ModuleLoader__.load({
       });
       ctx.slots.inject('sidebar.panellist', () =>
         ctx.slots.register({ name: 'sidebar.panellist', id: PANEL, order: 14, label: () => t('panel'), locale: NS }, SideIcon));
+
+      // Autodos is the product, DeepSeek Harness the engine underneath: the app's own brand
+      // seats (sidebar mark and name, the empty-session hero) carry the Autodos mark.
+      ctx.slots.inject('sidebar.brand.mark', () =>
+        ctx.slots.inject('sidebar.brand.name', function* () {
+          yield ctx.slots.register({ name: 'sidebar.brand.mark' }, ({ size = 24 }) => h(Logo, { size }));
+          yield ctx.slots.register({ name: 'sidebar.brand.name', locale: NS }, () => h(BrandName, { t }));
+        }));
+      ctx.slots.inject('conversation.hero.brand.mark', () =>
+        ctx.slots.register({ name: 'conversation.hero.brand.mark' }, ({ size = 34, className }) => h('span', { className }, h(Logo, { size }))));
+      ctx.effect(() => brandDocument(), 'autodos: title and icon');
+      if (ctx.layout) openOnStart(ctx);
+      else if (typeof ctx.inject === 'function') ctx.inject(['layout'], (c) => openOnStart(c));
+    }
+
+    function BrandName({ t }) {
+      return h('span', { style: { display: 'inline-flex', alignItems: 'baseline', gap: 7, whiteSpace: 'nowrap' } },
+        h('b', { style: { fontSize: 16, fontWeight: 700, letterSpacing: '-.01em' } }, 'Autodos'),
+        h('span', { style: { fontSize: 11.5, opacity: 0.6 } }, t('brand_sub')));
+    }
+
+    const ICON = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#15171a"/><rect x="12" y="14" width="11" height="36" rx="3" fill="#2bb3a3"/><rect x="27" y="14" width="11" height="24" rx="3" fill="#2bb3a3" opacity=".7"/><rect x="42" y="14" width="11" height="14" rx="3" fill="#2bb3a3" opacity=".45"/></svg>');
+
+    // Browser tab: the Autodos name and icon. The shell sets the title itself (session titles,
+    // its build name as fallback), so only the build name is swapped and an empty title filled.
+    function brandDocument() {
+      if (typeof document === 'undefined') return () => {};
+      const fix = () => {
+        const cur = document.title || '';
+        const next = !cur.trim() ? 'Autodos' : cur.replace(/DeepSeek Harness|DSH\b|本地构建|Local build/gi, 'Autodos');
+        if (next !== cur) document.title = next;
+        let link = document.querySelector('link[rel~="icon"]');
+        if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+        if (link.href !== ICON) { link.type = 'image/svg+xml'; link.href = ICON; }
+      };
+      fix();
+      const obs = new MutationObserver(fix);
+      obs.observe(document.head, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['href'] });
+      return () => obs.disconnect();
+    }
+
+    // Open on the Autodos page when the app starts at its home, not when a session link was opened.
+    let opened = false;
+    function openOnStart(c) {
+      if (opened || typeof location === 'undefined') return;
+      if (location.pathname !== '/' && location.pathname !== '') return;
+      if (store.get('home', 'autodos') !== 'autodos') return;
+      opened = true;
+      let tries = 0;
+      const go = () => {
+        try { c.layout.selectPanel(PANEL); } catch { if (++tries < 20) setTimeout(go, 150); }
+      };
+      setTimeout(go, 0);
     }
 
     module.exports.apply = apply;

@@ -348,32 +348,52 @@ test('a task stops at its budget and asks before spending more', async () => {
 });
 
 // ---- the team ----
-import { Team, detectAgents } from '../lib/team.js';
+import { detectAgents } from '../lib/team.js';
 
-test('staff and machines: who runs a task, where, and with what instructions', async () => {
+test('staff are roles; a free agent of the kind they prefer runs the task, wherever it is', async () => {
   const l = new Ledger(':memory:');
   const local = fakePaseo();
   const remote = fakePaseo();
   const hosts = [];
   const a = new Autodos(l, { paseo: local, paseoFor: (host) => (hosts.push(host), remote) });
-  const team = new Team(l);
+  const team = a.team;
+  team.noteAgents('local', [
+    { kind: 'claude', installed: true, used: true },
+    { kind: 'codex', installed: true, used: false },
+    { kind: 'hermes', installed: false, used: false },
+  ]);
+  assert.deepEqual(team.agents().map((x) => x.id).sort(), ['local:claude', 'local:codex']);
   const p = a.createProject({ name: 'Demo', path: '/repos/demo' });
-  const fe = team.createStaff({ name: '前端工程师', role: 'UI and pages', runtime: 'codex', instructions: 'Use the design tokens.' });
+  const fe = team.createStaff({ name: '前端工程师', role: 'UI and pages', prefer: 'codex', instructions: 'Use the design tokens.' });
+  assert.equal(fe.machine, undefined);
   assert.throws(() => team.createStaff({ name: '前端工程师' }), /already exists/);
-  assert.throws(() => team.createStaff({ name: 'x', runtime: 'gpt' }), /Runtime/);
+  assert.throws(() => team.createStaff({ name: 'x', prefer: 'gpt' }), /Preferred agent/);
 
   const t = await a.createTask({ title: 'Footer', project: 'Demo', staff: '前端工程师' });
   const [, run] = local.calls[0];
   assert.equal(run.provider, 'codex');
   assert.match(run.prompt, /^You are 前端工程师, UI and pages\.\nUse the design tokens\./);
   assert.equal(l.get('thread', t.threadId).staffId, fe.id);
+  assert.equal(l.get('task', t.id).agentRef, 'local:codex');
+  assert.equal(board(l).rows.find((r) => r.id === t.id).who.agent, 'Codex');
 
-  // A second machine, reached through its own Paseo daemon.
+  // Codex runs out of quota: the next task for this role falls back to Claude Code.
+  local.agents.get(l.get('thread', t.threadId).agentId).activity = "You've hit your limit · resets 3pm";
+  await a.sync();
+  assert.equal(team.statusOf(team.agent('local:codex')), 'limited');
+  const t1 = await a.createTask({ title: 'Header', project: 'Demo', staff: fe.id });
+  assert.equal(l.get('task', t1.id).agentRef, 'local:claude');
+  team.updateAgent('local:codex', { clearLimit: true });
+
+  // A second machine, reached through its own Paseo daemon, with the agents it has.
   assert.throws(() => team.createMachine({ name: 'studio' }), /Paseo daemon/);
-  const studio = team.createMachine({ name: 'studio', paseoHost: '192.168.1.20:6767', capacity: 3 });
-  const be = team.createStaff({ name: '后端工程师', runtime: 'claude', machine: 'studio' });
-  await assert.rejects(a.createTask({ title: 'API', project: 'Demo', staff: be.id }), /no checkout on studio/);
-  a.updateProject('Demo', {});
+  const studio = team.createMachine({ name: 'studio', paseoHost: '192.168.1.20:6767', capacity: 3, agents: ['claude'] });
+  const studioClaude = team.agent(`${studio.id}:claude`);
+  assert.equal(studioClaude.name, 'Claude Code @ studio');
+  const be = team.createStaff({ name: '后端工程师', prefer: 'claude', agent: studioClaude.id });
+  assert.throws(() => team.createStaff({ name: 'h', agent: 'local:hermes' }), /No agent/);
+  const stuck = await a.createTask({ title: 'API', project: 'Demo', staff: be.id }).catch((e) => e);
+  assert.match(stuck.message, /no checkout on studio/);
   l.update('project', p.id, { paths: { [studio.id]: '/Users/x/demo' } });
   const t2 = await a.createTask({ title: 'API 2', project: 'Demo', staff: be.id });
   assert.deepEqual(hosts, ['192.168.1.20:6767']);
@@ -382,13 +402,27 @@ test('staff and machines: who runs a task, where, and with what instructions', a
   await a.reply(t2.id, 'hello');
   assert.deepEqual(remote.calls.at(-1), ['send', { agentId: l.get('thread', l.get('task', t2.id).threadId).agentId, text: 'hello' }]);
 
+  // Every agent busy: the task waits, and starts by itself when a slot frees up.
+  team.updateAgent('local:claude', { capacity: 1 });
+  team.updateAgent(studioClaude.id, { capacity: 1 });
+  team.updateAgent('local:codex', { enabled: false });
+  const t3 = await a.createTask({ title: 'Later', project: 'Demo' });
+  assert.equal(t3.state, 'queued');
+  assert.equal(t3.waitingKind, 'agent');
+  await a.drop(t1.id);
+  await a.sync();
+  assert.equal(l.get('task', t3.id).state, 'working');
+  assert.equal(l.get('task', t3.id).agentRef, 'local:claude');
+
   const r = team.roster();
   const feRow = r.staff.find((s) => s.id === fe.id);
   assert.equal(feRow.counts.working, 1);
-  assert.equal(feRow.machineName, l.get('machine', 'local').name);
+  assert.equal(feRow.prefer, 'codex');
+  assert.equal(r.staff.find((s) => s.id === be.id).agentName, 'Claude Code @ studio');
   const studioRow = r.machines.find((m) => m.id === studio.id);
   assert.equal(studioRow.running, 1);
-  assert.deepEqual(studioRow.staff.map((s) => s.name), ['后端工程师']);
+  assert.deepEqual(studioRow.agents.map((x) => [x.kind, x.running, x.status]), [['claude', 1, 'ready']]);
+  assert.equal(r.agents.find((x) => x.id === 'local:codex').status, 'off');
 
   assert.throws(() => team.removeStaff(fe.id), /still has 1 open task/);
   assert.throws(() => team.removeMachine(studio.id), /still runs 1 agent/);
@@ -396,8 +430,19 @@ test('staff and machines: who runs a task, where, and with what instructions', a
   await a.drop(t.id);
   team.removeStaff(fe.id);
   assert.equal(l.get('staff', fe.id), null);
-  team.updateMachine(studio.id, { capacity: 4, name: 'studio-2' });
-  assert.equal(l.get('machine', studio.id).name, 'studio-2');
+  await a.drop(t2.id);
+  assert.throws(() => team.removeMachine(studio.id), /always use an agent there/);
+  team.updateStaff(be.id, { agent: '' });
+  team.removeMachine(studio.id);
+  assert.equal(l.get('agent', studioClaude.id), null);
+});
+
+test('a usage limit says when it resets', async () => {
+  const { limitUntil } = await import('../lib/team.js');
+  const now = new Date(2026, 10, 15, 13, 0);
+  assert.equal(new Date(limitUntil('resets 3pm', now)).getHours(), 15);
+  assert.equal(new Date(limitUntil('resets at 9:30am', now)).getDate(), 16);
+  assert.equal(new Date(limitUntil('rate limited', now)).getTime() - now.getTime(), 3600000);
 });
 
 test('finding agents looks only at commands and folders', () => {

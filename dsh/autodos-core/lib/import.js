@@ -63,6 +63,7 @@ export function waiting(t) {
 }
 
 export const WAITING_TEXT = {
+  agent: 'Waiting for a free agent',
   confirm_plan: 'Confirm the plan',
   confirm_start: 'Confirm before it starts',
   answer: 'Answer a question',
