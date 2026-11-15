@@ -1157,11 +1157,11 @@ window.__ModuleLoader__.load({
       // seats (sidebar mark and name, the empty-session hero) carry the Autodos mark.
       ctx.slots.inject('sidebar.brand.mark', () =>
         ctx.slots.inject('sidebar.brand.name', function* () {
-          yield ctx.slots.register({ name: 'sidebar.brand.mark' }, ({ size = 24 }) => h(Logo, { size }));
-          yield ctx.slots.register({ name: 'sidebar.brand.name', locale: NS }, () => h(BrandName, { t }));
+          yield ctx.slots.register({ name: 'sidebar.brand.mark', priority: -1 }, ({ size = 24 }) => h(Logo, { size }));
+          yield ctx.slots.register({ name: 'sidebar.brand.name', locale: NS, priority: -1 }, () => h(BrandName, { t }));
         }));
       ctx.slots.inject('conversation.hero.brand.mark', () =>
-        ctx.slots.register({ name: 'conversation.hero.brand.mark' }, ({ size = 34, className }) => h('span', { className }, h(Logo, { size }))));
+        ctx.slots.register({ name: 'conversation.hero.brand.mark', priority: -1 }, ({ size = 34, className }) => h('span', { className }, h(Logo, { size }))));
       ctx.effect(() => brandDocument(), 'autodos: title and icon');
       // The layout service is optional here: read it only inside its own inject scope.
       if (typeof ctx.inject === 'function') ctx.inject(['layout'], (c) => openOnStart(c));

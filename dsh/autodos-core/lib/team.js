@@ -59,6 +59,9 @@ export function limitUntil(text, now = new Date()) {
   return new Date(now.getTime() + 60 * 60 * 1000).toISOString();
 }
 
+/** The agent a thread ran on; threads from before agents were their own layer name only machine and kind. */
+export const agentOfThread = (t) => t.agentRef || (t.machine && t.runtime ? `${t.machine}:${t.runtime}` : null);
+
 const clean = (v) => (v == null ? null : String(v).trim() || null);
 const PREFS = new Set(['claude', 'codex', 'auto']);
 const findBy = (list, s) => list.find((y) => y.name?.toLowerCase() === s.toLowerCase());
@@ -205,7 +208,7 @@ export class Team {
 
   removeAgent(ref, { actor = 'you' } = {}) {
     const a = this.agent(ref);
-    const running = this.ledger.list('thread', { where: (t) => t.active && t.agentRef === a.id });
+    const running = this.ledger.list('thread', { where: (t) => t.active && agentOfThread(t) === a.id });
     if (running.length) throw new Error(`${a.name} is still running ${running.length} task(s)`);
     const pinned = this.ledger.list('staff', { where: (s) => s.agent === a.id });
     if (pinned.length) throw new Error(`${pinned.map((s) => s.name).join(', ')} always use ${a.name}; change that first`);
@@ -255,7 +258,8 @@ export class Team {
     const byAgent = new Map();
     const byMachine = new Map();
     for (const t of this.ledger.list('thread', { where: (t) => t.active })) {
-      if (t.agentRef) byAgent.set(t.agentRef, (byAgent.get(t.agentRef) || 0) + 1);
+      const ref = agentOfThread(t);
+      if (ref) byAgent.set(ref, (byAgent.get(ref) || 0) + 1);
       if (t.machine) byMachine.set(t.machine, (byMachine.get(t.machine) || 0) + 1);
     }
     return { byAgent, byMachine };
@@ -313,7 +317,7 @@ export class Team {
     const spentOf = (pred) => Math.round(threads.filter(pred).reduce((s, t) => s + (Number(t.costUsd) || 0), 0) * 100) / 100;
     const mini = (t) => ({ id: t.id, number: t.number, title: t.title, state: t.state });
     const agents = this.agents().map((a) => {
-      const mine = threads.filter((t) => t.agentRef === a.id);
+      const mine = threads.filter((t) => agentOfThread(t) === a.id);
       const running = mine.filter((t) => t.active);
       return {
         ...a,
@@ -321,7 +325,7 @@ export class Team {
         status: this.statusOf(a, now),
         running: running.length,
         tasks: running.map((t) => l.get('task', t.taskId)).filter(Boolean).map(mini),
-        spentUsd: spentOf((t) => t.agentRef === a.id),
+        spentUsd: spentOf((t) => agentOfThread(t) === a.id),
         lastActiveAt: mine.map((t) => t.updatedAt).sort().pop() || null,
       };
     });
