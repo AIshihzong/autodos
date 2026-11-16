@@ -151,6 +151,12 @@ export class Rules {
   /** Start one rule's work now. ev is the triggering event, or a time tick. */
   fire(rule, ev = null) {
     const d = this.store.data;
+    // Its project is paused: the rule does not file work there until it is resumed.
+    if (rule.projectId && this.store.project(rule.projectId)?.paused) {
+      rule.skippedAt = now();
+      this.store.changed();
+      return null;
+    }
     // Same object again (e.g. a new comment on the same issue): continue its open todo instead of a new one.
     if (ev?.key) {
       const open = d.todos.find((t) => t.ruleId === rule.id && t.eventKey === ev.key && !['done', 'closed'].includes(t.phase));

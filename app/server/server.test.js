@@ -1492,3 +1492,48 @@ test('team report: what landed, what is stuck and why, what waits for the person
   await call('PATCH', `/projects/${p.id}`, { report: { branch: 'main' } });
   assert.match((await call('POST', `/projects/${p.id}/report`, {})).body.error, /needs a branch of its own/);
 });
+
+test('pause and remove a project: work waits while paused and carries on after; removing takes its todos, rules and worktrees but not its repository', async () => {
+  const repo = mkRepo('repo-pause');
+  const { body: p } = await call('POST', '/projects', { path: repo });
+  const paused = await call('PATCH', `/projects/${p.id}`, { paused: true });
+  assert.equal(paused.body.paused, true);
+  assert.ok(paused.body.pausedAt);
+  // Nothing new runs in a paused project, and its rules file nothing.
+  const { body: t } = await call('POST', '/todos', { title: 'Waits while paused', projectId: p.id, start: true });
+  await new Promise((r) => setTimeout(r, 800));
+  assert.equal(await phaseOf(t.number), 'queued');
+  const { body: rule } = await call('POST', '/rules', { name: 'Nightly', projectId: p.id, when: { every: 60 }, title: 'Nightly', prompt: 'check' });
+  const fired = await call('POST', `/rules/${rule.id}/run`, {});
+  assert.equal(fired.status, 409);
+  assert.match(fired.body.error, /paused/);
+  // Resumed: the queue picks it up.
+  await call('PATCH', `/projects/${p.id}`, { paused: false });
+  const done = await waitFor(async () => {
+    const x = await todoOf(t.number);
+    return x.phase === 'review' && x;
+  }, 30000);
+  assert.ok(done.worktree && fs.existsSync(done.worktree));
+  assert.ok(!(await call('GET', '/state')).body.projects.find((x) => x.id === p.id).pausedAt);
+  // A todo that was running when its project was paused goes back to the queue.
+  const { body: t2 } = await call('POST', '/todos', { title: 'Paused while running', projectId: p.id, start: true });
+  await waitFor(async () => (await todoOf(t2.number)).phase === 'running', 15000).catch(() => {});
+  await call('PATCH', `/projects/${p.id}`, { paused: true });
+  const t2now = await waitFor(async () => {
+    const x = await todoOf(t2.number);
+    return ['queued', 'review'].includes(x.phase) && x;
+  });
+  if (t2now.phase === 'queued') assert.ok(t2now.messages.some((m) => /Paused with its project/.test(m.text)));
+  // Removed: its todos, rules and worktrees go; the repository and branches holding work stay.
+  const gone = await call('DELETE', `/projects/${p.id}`);
+  assert.equal(gone.status, 200);
+  assert.ok(gone.body.todos >= 2);
+  assert.equal(gone.body.rules, 1);
+  const s = (await call('GET', '/state')).body;
+  assert.ok(!s.projects.some((x) => x.id === p.id));
+  assert.ok(!s.todos.some((x) => x.projectId === p.id));
+  assert.ok(!s.rules.some((x) => x.projectId === p.id));
+  assert.ok(!fs.existsSync(done.worktree), 'its worktree is removed');
+  assert.ok(fs.existsSync(path.join(repo, 'a.txt')), 'the repository is left alone');
+  assert.equal((await call('DELETE', `/projects/${p.id}`)).status, 404);
+});

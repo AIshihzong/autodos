@@ -172,7 +172,7 @@ export class Autopilot {
 
   async tick() {
     for (const project of this.store.data.projects) {
-      if (!project.path || !fs.existsSync(project.path) || this.busy.has(project.id)) continue;
+      if (project.paused || !project.path || !fs.existsSync(project.path) || this.busy.has(project.id)) continue;
       const u = project.upstream;
       const wantsPull = project.pushBase || u?.url || project.backlog?.file;
       if (!wantsPull && !project.configSha) continue;

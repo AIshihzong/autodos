@@ -197,14 +197,14 @@ export class Lead {
   /** Whether the lead stands at this gate first. Called by the runner as the todo arrives there. */
   takes(t, phase) {
     const project = this.store.project(t.projectId);
-    if (!project?.lead?.decide || !LEAD_GATES.includes(phase)) return false;
+    if (!project?.lead?.decide || project.paused || !LEAD_GATES.includes(phase)) return false;
     if (t.leadHold || t.autoAccepting) return false; // already passed on to the person, or landing by itself
     return true; // out of rounds it still looks once more, to hand over properly (leadOptions: final)
   }
 
   /** Every few minutes: anything of a lead's project that waits at a gate without a decision gets one. */
   patrol() {
-    for (const p of this.store.data.projects) if (p.lead?.decide) this.sweep(p);
+    for (const p of this.store.data.projects) if (p.lead?.decide && !p.paused) this.sweep(p);
   }
 
   /** Stand at every gate of a project that is waiting for the person right now (after the lead is switched on). */
@@ -262,7 +262,7 @@ export class Lead {
     const project = this.store.project(t.projectId);
     const d = this.store.data;
     const visit = t.leadPending?.at;
-    const still = () => this.deciding.get(t.id) === token && t.leadPending?.at === visit && t.phase === gate && !this.runner.busy(t);
+    const still = () => this.deciding.get(t.id) === token && t.leadPending?.at === visit && t.phase === gate && !this.runner.busy(t) && !this.store.project(t.projectId)?.paused;
     let out = null;
     let options = { allowed: ['escalate'], blocks: [] };
     try {

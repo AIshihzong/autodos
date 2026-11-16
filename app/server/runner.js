@@ -170,6 +170,43 @@ export class Runner extends EventEmitter {
   }
 
   /**
+   * The person paused a project: what runs there stops and goes back to the queue, where it waits until the
+   * project is resumed. Nothing is thrown away: worktrees, branches and sessions stay as they are.
+   */
+  pauseProject(project) {
+    const stopped = [];
+    for (const t of this.store.data.todos) {
+      if (t.projectId !== project.id || !this.running.has(t.id)) continue;
+      this.#userAbort(t);
+      this.addMessage(t, 'system', `Paused with its project “${project.name}”; it carries on when the project is resumed.`, { kind: 'paused' });
+      this.setPhase(t, 'queued');
+      stopped.push(t.number);
+    }
+    this.store.changed();
+    return stopped;
+  }
+
+  /**
+   * The person removes a project from Autodos: its todos stop and go, with the worktrees they made.
+   * The project's own folder and repository are left alone, and so is every branch that holds work.
+   */
+  async dropProject(project) {
+    const mine = this.store.data.todos.filter((t) => t.projectId === project.id);
+    let kept = 0;
+    for (const t of mine) this.#userAbort(t);
+    for (const t of mine) {
+      if (!t.worktree || !project.path) continue;
+      const ahead = await diffFiles(project.path, t.branch, t.base).catch(() => ['?']);
+      if (ahead.length) kept++;
+      await removeWorktree(project.path, t.worktree, t.branch, !ahead.length);
+    }
+    const gone = new Set(mine.map((t) => t.id));
+    this.store.data.todos = this.store.data.todos.filter((t) => !gone.has(t.id));
+    this.store.changed();
+    return { todos: mine.length, keptBranches: kept };
+  }
+
+  /**
    * The todo was filed against the wrong project: start it over in the right one.
    * Nothing it wrote in the old place is deleted: an untouched worktree goes, one that holds work stays with its branch.
    */
@@ -389,6 +426,7 @@ export class Runner extends EventEmitter {
         next = Math.min(next, until);
         continue;
       }
+      if (this.store.project(t.projectId)?.paused) continue; // its project is paused: it waits in the queue
       if (this.running.size >= limit) break;
       if (this.running.has(t.id)) continue; // previous turn still shutting down
       const machine = this.store.agent(t.agentId)?.machine;

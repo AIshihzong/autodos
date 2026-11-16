@@ -82,7 +82,7 @@ export class Watch {
   async tick() {
     for (const p of this.store.data.projects) {
       const r = p.report;
-      if (!r) continue;
+      if (!r || p.paused) continue;
       const every = Math.max(15, Number(r.every) || 120) * 60_000;
       if (r.lastAt && Date.now() - Date.parse(r.lastAt) < every) continue;
       await this.report(p).catch((e) => {

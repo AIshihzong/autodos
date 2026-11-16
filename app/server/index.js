@@ -415,6 +415,7 @@ export function createApp({ dataDir } = {}) {
       const r = store.data.rules.find((x) => x.id === rid);
       if (!r) throw new HttpError(404, 'No such rule');
       const t = rules.fire(r);
+      if (!t && r.projectId && store.project(r.projectId)?.paused) throw new HttpError(409, 'Its project is paused; resume the project first');
       if (!t) throw new HttpError(409, `This rule already has ${r.maxOpen} open todo${r.maxOpen > 1 ? 's' : ''}; it runs again when one is done or closed`);
       return t;
     }
@@ -552,10 +553,33 @@ export function createApp({ dataDir } = {}) {
         return c.create(body);
       }
       if (method === 'PATCH') {
+        const was = name === 'projects' ? !!store.project(rid)?.paused : false;
+        if (name === 'projects' && 'paused' in body) body.paused = !!body.paused;
         const item = c.update(rid, body);
+        if (name === 'projects' && item.paused !== was) {
+          // Paused: what runs there goes back to the queue and waits. Resumed: the queue and the lead pick it up again.
+          if (item.paused) item.pausedAt = now(), runner.pauseProject(item);
+          else delete item.pausedAt, runner.pump(), item.lead?.decide && lead.sweep(item);
+          store.changed();
+        }
         // Switching a project's lead on hands it what is waiting for the person right now.
-        if (name === 'projects' && body.lead?.decide) lead.sweep(item);
+        else if (name === 'projects' && body.lead?.decide && !item.paused) lead.sweep(item);
         return item;
+      }
+      if (method === 'DELETE' && name === 'projects') {
+        const project = store.project(rid);
+        if (!project) throw new HttpError(404, 'Not found');
+        // Everything Autodos kept for this project goes with it; the folder and its repository stay as they are.
+        const d = store.data;
+        for (const t of d.todos) if (t.projectId === project.id) previews.stop(t.id);
+        const out = await runner.dropProject(project);
+        const rulesBefore = d.rules.length;
+        d.rules = d.rules.filter((r) => r.projectId !== project.id);
+        const reqBefore = (d.requirements || []).length;
+        if (d.requirements) d.requirements = d.requirements.filter((r) => r.projectId !== project.id);
+        for (const tp of d.topics) if (tp.projectId === project.id) delete tp.projectId;
+        c.remove(rid);
+        return { ok: true, todos: out.todos, keptBranches: out.keptBranches, rules: rulesBefore - d.rules.length, requirements: reqBefore - (d.requirements || []).length };
       }
       if (method === 'DELETE') return c.remove(rid);
     }

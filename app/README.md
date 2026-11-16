@@ -116,6 +116,10 @@ Per project (Projects → the project → Settings):
 - **Setup command**: runs once in each new worktree, on the hub and on worker machines (`pnpm install --frozen-lockfile`, copying an env file…). If it fails, the todo fails and says why.
 - **Push the base branch to origin after each merge**: for a base that other machines or GitHub should see. Never forced; if origin has commits this machine lacks, they are merged in first.
 
+**Pause** (the pause button on the project's row) stops everything Autodos does there: what is running goes back to the queue, nothing new starts, its rules file nothing, the lead does not decide, and no report, pull, sync or backlog runs. Worktrees, branches and sessions stay; **Resume** carries on where it stopped.
+
+**Delete** removes the project from Autodos together with its todos, their worktrees, its rules and its requirement cards. The folder and its repository are not touched, and a branch that holds work is kept.
+
 ## Unattended projects
 
 A project can keep itself moving while you are away. Everything below is off until you turn it on for that project.

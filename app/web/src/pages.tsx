@@ -513,14 +513,26 @@ export function ProjectsPage({ state }: { state: State }) {
                   {open ? `${open} ${t.openTodos}` : t.noOpenTodos}
                   {last ? ` · ${ago(last, lang)}` : ''}
                 </span>
+                {p.paused && <span className="chip warn">{t.projectPaused}</span>}
                 <span className="chip">{p.git ? t.gitRepo : t.plainFolder}</span>
                 <span className="tl-machine">
+                  <button
+                    className="icon-btn"
+                    title={p.paused ? t.resumeProject : t.pauseProject}
+                    aria-label={`${p.paused ? t.resumeProject : t.pauseProject} ${p.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      guard(() => actions.save('projects', { id: p.id, paused: !p.paused }))();
+                    }}
+                  >
+                    <Icon name={p.paused ? 'play' : 'pause'} size={14} />
+                  </button>
                   <button
                     className="icon-btn"
                     aria-label={`${t.delete} ${p.name}`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (confirm(`${t.delete}: ${p.name}?`)) guard(() => actions.remove('projects', p.id))();
+                      if (confirm(t.removeProjectAsk.replace('{name}', p.name).replace('{n}', String(mine.length)))) guard(() => actions.remove('projects', p.id))();
                     }}
                   >
                     <Icon name="trash" size={14} />
