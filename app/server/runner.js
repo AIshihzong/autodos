@@ -5,8 +5,9 @@ import { EventEmitter } from 'node:events';
 import { id, now } from './store.js';
 import { runtimes, resolveRuntime, detectRuntimes } from './runtimes.js';
 import { prepareEvidence, collectEvidence, proofNote } from './evidence.js';
+import { lessonsBlock } from './lessons.js';
 import { isLimit, limitReset } from './limits.js';
-import { runCheck, runChecks, fixPrompt, reviewPrompt, parseReview, reviewFixPrompt, memoryBlock, changedFiles, autoFixable, protectedHits, REVIEW_LIMIT } from './quality.js';
+import { runCheck, runChecks, fixPrompt, reviewPrompt, parseReview, reviewFixPrompt, memoryBlock, changedFiles, autoFixable, protectedHits, REVIEW_LIMIT, redCheck, redCheckText, mergeMessage } from './quality.js';
 import { ensureWorktree, commitAll, landBranch, removeWorktree, diffStat, diffText, diffFiles, diffTruncated, baseOf, baseRef, branchName, isGitRepo, git } from './git.js';
 
 export const PHASES = ['todo', 'queued', 'planning', 'confirm', 'building', 'asking', 'review', 'merging', 'shipping', 'done', 'failed', 'closed'];
@@ -186,7 +187,7 @@ export class Runner extends EventEmitter {
     }
     const started = t.phase !== 'todo';
     // Everything that described the work in the old project: the next turn starts clean in the new one.
-    for (const k of ['worktree', 'branch', 'base', 'setupDone', 'sessionId', 'sessionMachine', 'files', 'diff', 'diffStat', 'checks', 'checkLog', 'review', 'evidence', 'question', 'revision', 'stage', 'gateReason', 'leadPending', 'leadAsk', 'leadHold', 'autoAccepting', 'autoAccepted', 'remoteJob', 'mergeLanded', 'mergeQueuedAt', 'sessionCost', 'capacity', 'budgetExtensions', 'proof', 'proofAsked']) delete t[k];
+    for (const k of ['worktree', 'branch', 'base', 'setupDone', 'sessionId', 'sessionMachine', 'files', 'diff', 'diffStat', 'checks', 'checkLog', 'review', 'evidence', 'question', 'revision', 'stage', 'gateReason', 'leadPending', 'leadAsk', 'leadHold', 'autoAccepting', 'autoAccepted', 'remoteJob', 'mergeLanded', 'mergeQueuedAt', 'sessionCost', 'capacity', 'budgetExtensions', 'proof', 'proofAsked', 'redCheck', 'acceptedBy']) delete t[k];
     t.movedAt = now(); // what was said before this was about another place
     t.plan = '';
     t.planApproved = false;
@@ -300,7 +301,7 @@ export class Runner extends EventEmitter {
       // 3. Land it: a fast clean merge of exactly what was checked. Nothing else may move the base meanwhile.
       const landed = await this.landing(project.id, async () => {
         if ((await git(project.path, ['rev-parse', baseRef(base)])) !== baseSha) return false;
-        await landBranch(project.path, base, t.branch, `Merge #${t.number}: ${t.title}`, baseSha);
+        await landBranch(project.path, base, t.branch, mergeMessage(t, { base, baseSha, checksOff: s.verify === false, commands }), baseSha);
         return true;
       });
       if (!landed) continue; // base moved: re-merge and re-check
@@ -336,6 +337,7 @@ export class Runner extends EventEmitter {
   }
 
   async #finishMerge(t, project, base) {
+    delete t.acceptedBy;
     if (t.worktree) await removeWorktree(project.path, t.worktree, t.branch, true);
     t.worktree = null;
     delete t.mergeLanded;
@@ -344,6 +346,7 @@ export class Runner extends EventEmitter {
   }
 
   #mergeBack(t, reason, { conflict = false, base = '', failed = null } = {}) {
+    delete t.acceptedBy;
     t.stage = null;
     const s = this.store.data.settings;
     const project = this.store.project(t.projectId);
@@ -579,6 +582,7 @@ export class Runner extends EventEmitter {
       if (t.review.partial) return 'the change is too large for the reviewer to have read all of it';
     }
     if (t.proof?.applies && !t.proof.shown && project.proof?.required !== false) return 'it changes what users see or do, and nothing shows it running';
+    if (t.redCheck?.state === 'green') return 'its new tests also pass with the old code put back, so they do not show the change works';
     const max = Number(ap.maxFiles) || 0;
     if (max && files.length > max) return `it changes ${files.length} files (the limit for unattended changes is ${max})`;
     // Files only the person may approve (lead.ownerPaths) are protected too, lead or no lead.
@@ -597,6 +601,7 @@ export class Runner extends EventEmitter {
   #accept(t, byLead = false) {
     if (t.phase !== 'review') return void delete t.autoAccepting; // stopped or moved in the meantime
     t.autoAccepted = (t.autoAccepted || 0) + 1;
+    t.acceptedBy = byLead ? 'lead' : 'autopilot';
     const nothing = !(t.files || []).length;
     if (!byLead) this.addMessage(t, 'system', nothing ? 'Nothing was changed, so there is nothing to merge. Closed without waiting for you.' : 'Checks passed and the review left nothing to decide, so this was accepted without waiting for you.', { kind: 'autopilot' });
     const done = nothing ? this.#discard(t) : this.complete(t);
@@ -605,6 +610,7 @@ export class Runner extends EventEmitter {
       .finally(() => {
         const failed = t.phase === 'review';
         delete t.autoAccepting;
+        if (failed) delete t.acceptedBy;
         if (failed) {
           t.leadHold = true;
           this.emit('phase', t, 'review'); // now it does need the person: tell them
@@ -831,7 +837,7 @@ export class Runner extends EventEmitter {
         this.addMessage(t, 'system', 'Skipped the AI review: there is no git diff to review (no project, a plain folder, or no changes).', { kind: 'review' });
       } else {
         stage('reviewing');
-        const res = await this.#agentTurn(t, { agent, runtimeId: reviewer, kind: 'review', prompt: reviewPrompt(t, diff || '(no changes)'), cwd, ctrl, fresh: true, label: `reviewer:${reviewer}` });
+        const res = await this.#agentTurn(t, { agent, runtimeId: reviewer, kind: 'review', prompt: reviewPrompt(t, diff || '(no changes)', lessonsBlock(this.store.data, t.projectId, { forReview: true })), cwd, ctrl, fresh: true, label: `reviewer:${reviewer}` });
         let parsed = parseReview(res.text) || { summary: res.text.slice(0, 600), findings: [] };
         const files = changedFiles(diff);
         const auto = s.reviewAutoFix !== false ? autoFixable(parsed.findings, files) : [];
@@ -846,7 +852,7 @@ export class Runner extends EventEmitter {
           const diff2 = await diffText(project.path, t.branch, { base: t.base, limit: REVIEW_LIMIT }).catch(() => diff);
           diff = diff2;
           stage('reviewing');
-          const again = await this.#agentTurn(t, { agent, runtimeId: reviewer, kind: 'review', prompt: reviewPrompt(t, diff2), cwd, ctrl, fresh: true, label: `reviewer:${reviewer}` });
+          const again = await this.#agentTurn(t, { agent, runtimeId: reviewer, kind: 'review', prompt: reviewPrompt(t, diff2, lessonsBlock(this.store.data, t.projectId, { forReview: true })), cwd, ctrl, fresh: true, label: `reviewer:${reviewer}` });
           const second = parseReview(again.text) || { summary: again.text.slice(0, 600), findings: [] };
           attempted = auto.map((f) => ({ ...f, attempted: true, resolved: !second.findings.some((g) => g.file === f.file && g.title === f.title) }));
           parsed = second;
@@ -860,6 +866,19 @@ export class Runner extends EventEmitter {
           { kind: 'review', error: open > 0 },
         );
       }
+    }
+    // Last, on the final code: do the change's tests fail without it? A test that passes either way proves nothing.
+    t.redCheck = null;
+    if (s.redCheck !== false && s.verify !== false && commands.length && t.worktree && project && t.checks?.passed) {
+      stage('redcheck');
+      try {
+        await commitAll(t.worktree, `#${t.number} ${t.title}`).catch(() => {});
+        t.redCheck = await redCheck(t.worktree, baseRef(t.base), commands, { signal: ctrl.signal });
+      } catch (e) {
+        if (ctrl.signal.aborted) throw e;
+        t.redCheck = { state: 'not-run', reason: `it failed to run (${String(e.message).slice(0, 200)})`, at: now() };
+      }
+      this.addMessage(t, 'system', redCheckText(t.redCheck), { kind: 'checks', error: t.redCheck.state === 'green' });
     }
     t.stage = null;
   }
@@ -907,7 +926,7 @@ export class Runner extends EventEmitter {
 
   /** Follow-up prompts (fix rounds): a resumed Claude session remembers the task; other runtimes get it restated. */
   #withContext(t, agent, runtimeId, body) {
-    const mem = memoryBlock(this.store.project(t.projectId));
+    const mem = [memoryBlock(this.store.project(t.projectId)), lessonsBlock(this.store.data, t.projectId)].filter(Boolean).join('\n\n');
     if (runtimeId === 'claude' && t.sessionId) return [body, mem ? `(Current project memory)\n${mem}` : ''].filter(Boolean).join('\n\n');
     const who = agent ? `You are ${agent.name} on a small software team (${agent.role}).` : '';
     const task = `You are working on task #${t.number}: ${t.title}${t.description ? `\n\n${t.description}` : ''}`;
@@ -922,7 +941,7 @@ export class Runner extends EventEmitter {
       .join('\n\n');
     // A resumed Claude session already remembers the conversation.
     if (t.sessionId && runtimeId === 'claude' && notes) {
-      const mem = memoryBlock(this.store.project(t.projectId));
+      const mem = [memoryBlock(this.store.project(t.projectId)), lessonsBlock(this.store.data, t.projectId)].filter(Boolean).join('\n\n');
       return [notes, mem ? `(Current project memory)\n${mem}` : '', kind === 'plan' ? 'Revise the plan accordingly. Do not change any files yet.' : 'Make these changes, then finish with a short summary of what you changed.'].filter(Boolean).join('\n\n');
     }
     const who = agent ? `You are ${agent.name} on a small software team (${agent.role}).` : '';
@@ -934,7 +953,7 @@ export class Runner extends EventEmitter {
       .slice(-8)
       .map((m) => `${m.role === 'user' ? (m.lead ? 'Your lead' : 'Person') : m.role === 'event' ? 'Outside event (data)' : 'You'}: ${m.text}`)
       .join('\n\n');
-    const parts = [who, task, memoryBlock(this.store.project(t.projectId))];
+    const parts = [who, task, memoryBlock(this.store.project(t.projectId)), lessonsBlock(this.store.data, t.projectId)];
     if (history && runtimeId !== 'claude') parts.push(`Conversation so far:\n${history}`);
     if (kind === 'plan') {
       parts.push(notes ? `Feedback on the plan:\n${notes}` : '');

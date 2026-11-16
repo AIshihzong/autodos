@@ -3,6 +3,7 @@
 import { execFile } from 'node:child_process';
 import { childEnv } from './runtimes.js';
 import { git, commitAll, removeWorktree, baseOf } from './git.js';
+import { redCheckText } from './quality.js';
 
 export function gh(cwd, args) {
   return new Promise((resolve, reject) => {
@@ -87,6 +88,7 @@ export class Delivery {
       const body = [
         t.description || '',
         t.checks ? `Checks: ${t.checks.passed ? 'passed' : 'failing'} (${t.checks.results.map((r) => r.command).join(', ')})` : '',
+        t.redCheck ? redCheckText(t.redCheck) : '',
         t.review ? `AI review by ${t.review.reviewer}: ${t.review.summary || ''}` : '',
         `Filed by Autodos as #${t.number}.`,
       ]

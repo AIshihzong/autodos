@@ -7,6 +7,7 @@ import { knowledgeBlock } from './lead.js';
 import { refOf } from './git.js';
 import { nextRun } from './rules.js';
 import { retroStats, retroText } from './retro.js';
+import { lessonsList, parseRevoke } from './lessons.js';
 import { isConfirm, isDrop, normalizeRequirement, upsertRequirement, pendingRequirement, requirementText, todoDescription, syncRequirement } from './requirements.js';
 
 const zh = (s) => /[一-鿿]/.test(s);
@@ -219,6 +220,18 @@ export class Chief {
     }
 
     if (/^(weekly )?retro(spective)?\b|^(周回顾|每周回顾|回顾|复盘)/i.test(text.trim())) return say(await this.#retro(cn));
+    // The team's lessons and rules: listed on request; only the owner takes one back.
+    if (/^(lessons|rules|教训|错题本|团队规则)$/i.test(text.trim())) return say(lessonsList(d, cn));
+    const revoke = parseRevoke(text);
+    if (revoke) {
+      if (!canApprove) return say(cn ? `撤销 ${revoke} 要由负责人来做。` : `Only the owner can take ${revoke} back.`);
+      const l = (d.lessons || []).find((x) => x.ref === revoke && ['rule', 'watching'].includes(x.status));
+      if (!l) return say(cn ? `没有找到 ${revoke}。` : `There is no ${revoke}.`);
+      l.status = 'revoked';
+      l.updatedAt = now();
+      this.store.changed();
+      return say(cn ? `已撤销 ${revoke}：${l.rule}。之后的构建和审查不再用它。` : `Took ${revoke} back: ${l.rule}. Builds and reviews no longer use it.`);
+    }
     // "Run X every day" becomes a schedule (and a first run now).
     const every = canApprove && parseEvery(text);
     if (every) {

@@ -693,3 +693,7 @@ select.chip-select { width: auto; height: 28px; padding: 0 26px 0 10px; border-r
 .qr { flex: none; background: #fff; padding: 10px; border-radius: 10px; box-sizing: content-box; }
 .qr svg { display: block; width: 100%; height: 100%; }
 @media (max-width: 760px) { .bind-card { flex-direction: column; align-items: flex-start; } }
+.g-row.lesson .g-label > span { display: flex; align-items: baseline; gap: var(--s-2); line-height: 1.45; }
+.g-row.lesson .g-label > span .chip { flex: none; height: 20px; padding: 0 7px; font-size: 11.5px; }
+.g-row.lesson .g-label small { white-space: normal; }
+.lesson-hint { margin: 0; padding: var(--s-2) var(--s-4) var(--s-3); border-top: 1px solid var(--line); }

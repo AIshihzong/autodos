@@ -876,6 +876,42 @@ function RetroPanel() {
   );
 }
 
+function LessonsPanel({ state }: { state: State }) {
+  const t = useT();
+  const live = (state.lessons || []).filter((l) => l.status === 'rule' || l.status === 'watching');
+  // Rules first, then the lessons seen most recently.
+  const sorted = [...live].sort((a, b) => (a.status === b.status ? (b.seen[b.seen.length - 1] || '').localeCompare(a.seen[a.seen.length - 1] || '') : a.status === 'rule' ? -1 : 1));
+  const where = (pid: string | null) => (pid ? state.projects.find((p) => p.id === pid)?.name || '' : t.lessonWhole);
+  return (
+    <Group title={t.lessons}>
+      {!sorted.length ? (
+        <p className="empty">{t.lessonsNone}</p>
+      ) : (
+        <>
+          {sorted.map((l) => (
+            <div key={l.id} className="g-row lesson">
+              <div className="g-label">
+                <span>
+                  <span className={`chip ${l.status === 'rule' ? 'ok' : ''}`}>{l.status === 'rule' ? t.lessonRule : t.lessonWatching}</span> {l.ref} · {l.rule}
+                </span>
+                <small>
+                  {[where(l.projectId), t.lessonDays.replace('{n}', String(l.seen.length)), l.why].filter(Boolean).join(' · ')}
+                </small>
+              </div>
+              <div className="g-control">
+                <button className="btn small ghost" onClick={() => actions.setLesson(l.ref, 'revoked')}>
+                  {t.lessonRevoke}
+                </button>
+              </div>
+            </div>
+          ))}
+          <p className="small muted lesson-hint">{t.lessonsHint}</p>
+        </>
+      )}
+    </Group>
+  );
+}
+
 export function UsagePage({ state }: { state: State }) {
   const t = useT();
   const lang = useLang();
@@ -945,6 +981,7 @@ export function UsagePage({ state }: { state: State }) {
         </div>
       </Group>
       <RetroPanel />
+      <LessonsPanel state={state} />
       <Group title={t.byAgent}>
         <div className="g-row usage-row head">
           <span />

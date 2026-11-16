@@ -5,7 +5,7 @@ export interface Message { hidden?: boolean; id: string; role: 'user' | 'agent' 
 export interface Todo {
   id: string; number: number; title: string; description: string; labels: string[]; projectId: string | null; agentId: string | null;
   phase: Phase; mode: 'plan' | 'run'; plan: string; planApproved: boolean; messages: Message[]; live: string; runtime?: string;
-  worktree?: string | null; branch?: string; diffStat?: string; diff?: string; stage?: 'setup' | 'verifying' | 'fixing' | 'reviewing' | null; base?: string; ref?: string; files?: string[] | null;
+  worktree?: string | null; branch?: string; diffStat?: string; diff?: string; stage?: 'setup' | 'verifying' | 'fixing' | 'reviewing' | 'redcheck' | null; base?: string; ref?: string; files?: string[] | null;
   question?: { text: string; options: string[]; at: string; recommend?: string } | null; leadPending?: { gate: string; at: string } | null; leadAsk?: { text: string; options: string[]; recommend: string; why: string; blocks?: string[] } | null; ruleId?: string | null; parentId?: string | null; depth?: number;
   pr?: { number: number; url: string; base: string; state?: string } | null; event?: { source: string; type: string; url: string; text: string } | null;
   checks?: { results: CheckResult[]; passed: boolean; fixes: number; at: string } | null; review?: { reviewer: string; summary: string; findings: Finding[]; at: string } | null; error?: string | null; createdAt: string; updatedAt: string; scheduleId?: string | null;
@@ -29,6 +29,7 @@ export interface DoctorItem { id: CheckId; need: 'required' | 'agent' | 'optiona
 export interface FixJob { running: boolean; ok: boolean | null; log: string; command: string }
 export interface Doctor { ready: boolean; agent: boolean; items: DoctorItem[]; platform: string; host: string; at: string; jobs: Record<string, FixJob> }
 export type FixResult = { kind: 'run' | 'terminal' | 'manual' | 'none'; command?: string } | { kind: 'link'; url: string };
+export interface Lesson { id: string; ref: string; projectId: string | null; rule: string; why?: string; doneRight?: string; evidence?: { day: string; text: string }[]; seen: string[]; status: 'watching' | 'rule' | 'archived' | 'revoked'; createdAt: string; promotedAt?: string }
 export interface Retro { days: number; created: number; done: number; open: number; runs: number; failedRuns: number; agentMs: number; usd: number; unpricedRuns: number; tokens: number; reworkRate: number; checksFirstPass: number | null; findings: { high: number; medium: number; low: number }; conflicts: number; medianLeadMs: number | null; reworked: { number: number; title: string; rounds: number }[]; failures: { text: string; count: number }[] }
 export interface Upstream { url: string; branch: string; every: number; mirror?: boolean; lastAt?: string; lastResult?: string; lastError?: string | null; lastTodo?: number }
 export interface Project {
@@ -49,7 +50,7 @@ export interface Runtime { id: string; name: string; available: boolean; version
 export interface Settings { concurrency: number; defaultRuntime: string; chiefRuntime: string; claudePermissionMode: string; codexSandbox?: string; useWorktrees: boolean; autoStart: boolean; planFirst: boolean; verify: boolean; verifyAttempts: number; reviewer: string; reviewAutoFix: boolean; budgetMinutes: number; budgetUsd: number; publicUrl?: string; delegateDepth: number; delegateChildren: number; steer?: boolean; selfUpdate?: boolean; keepAwake?: boolean }
 export interface UpdateStatus { possible: boolean; enabled: boolean; checkedAt: string; current: string; available: string; count: number; waiting: boolean; error: string; skipped: string; updatedAt: string; from: string; checking?: boolean }
 export interface State {
-  settings: Settings; projects: Project[]; agents: Agent[]; todos: Todo[]; chief: ChiefMessage[]; requirements?: Requirement[]; chiefBusy: boolean; topics: Topic[]; mcpPath: string;
+  settings: Settings; projects: Project[]; agents: Agent[]; todos: Todo[]; chief: ChiefMessage[]; requirements?: Requirement[]; lessons?: Lesson[]; chiefBusy: boolean; topics: Topic[]; mcpPath: string;
   workers: Worker[]; pairings: { code: string; words: string[]; host: string; name: string }[]; previews: { todoId: string; url: string; ready: boolean }[]; rules: Rule[]; sources: Source[]; events: EventRec[]; channels: Channel[]; runs: Run[]; runtimes: Runtime[]; dataDir: string; feishu: Feishu;
 }
 
@@ -237,6 +238,7 @@ export const actions = {
   updateWorker: (id: string, capacity: number) => api('PATCH', `/workers/${id}`, { capacity }),
   deleteWorker: (id: string) => api('DELETE', `/workers/${id}`),
   retro: (days = 7) => api<Retro>('GET', `/retro?days=${days}`),
+  setLesson: (ref: string, status: Lesson['status']) => api('PATCH', `/lessons/${ref}`, { status }),
   save: (kind: 'agents' | 'projects' | 'schedules', item: any) => (item.id ? api('PATCH', `/${kind}/${item.id}`, item) : api('POST', `/${kind}`, item)),
   remove: (kind: 'agents' | 'projects' | 'schedules', id: string) => api('DELETE', `/${kind}/${id}`),
   checkPath: (path: string) => api<{ exists: boolean; git: boolean }>('GET', `/check-path?path=${encodeURIComponent(path)}`),

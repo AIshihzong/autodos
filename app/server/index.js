@@ -25,6 +25,8 @@ import { Previews, detectPreview } from './preview.js';
 import { Delivery } from './github.js';
 import { serveEvidence } from './evidence.js';
 import { Autopilot } from './autopilot.js';
+import { Lessons, dayOf } from './lessons.js';
+import { runtimes, resolveRuntime } from './runtimes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(here, '..', 'dist');
@@ -78,6 +80,21 @@ export function createApp({ dataDir } = {}) {
   runner.on('phase', (t) => ['done', 'closed', 'merging', 'shipping'].includes(t.phase) && previews.stop(t.id));
   runner.workers = workers;
   const autopilot = new Autopilot(store, runner, rules, newTodo);
+  // The nightly look back: the lead writes down what the team got wrong; the prompts carry it from then on.
+  const lessons = new Lessons(store, {
+    // Said where the person will see it: the project's latest Feishu conversation, else the latest one.
+    say: (text, extra = {}) => {
+      const open = store.data.topics.filter((x) => !x.archived).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      const tp = open.find((x) => x.feishu && x.projectId === extra.projectId) || open.find((x) => x.feishu) || open.find((x) => x.projectId === extra.projectId);
+      return chief.say(text, { ...extra, topicId: tp?.id });
+    },
+    think: async (prompt, project) => {
+      const runtimeId = resolveRuntime(store.data.settings.chiefRuntime);
+      if (runtimeId === 'demo') return '{"seen": [], "new": []}';
+      return (await runtimes[runtimeId].run({ prompt, kind: 'chief', cwd: project?.path || store.dir, settings: store.data.settings })).text;
+    },
+  });
+  chief.lessons = lessons;
   attachChannels(store, runner);
 
   const snapshot = () => {
@@ -89,6 +106,7 @@ export function createApp({ dataDir } = {}) {
       todos: d.todos,
       chief: d.chief.slice(-600),
       requirements: (d.requirements || []).slice(-300),
+      lessons: d.lessons || [],
       topics: d.topics,
       mcpPath: path.join(here, '..', 'mcp', 'server.js'),
       chiefBusy: chief.busy,
@@ -160,6 +178,26 @@ export function createApp({ dataDir } = {}) {
     if (method === 'POST' && res === 'doctor' && rid && sub === 'fix')
       // When an install finishes, look for the agents again so the board can use them at once.
       return fixCheck(rid, () => (detectRuntimes(true), broadcast('doctor', { at: Date.now() }), store.changed()), store.data.settings);
+    if (res === 'lessons') {
+      store.data.lessons ||= [];
+      if (method === 'GET') return store.data.lessons;
+      // Look back at a day now (default: yesterday), whatever the hour.
+      if (method === 'POST' && rid === 'review') {
+        const project = store.project(body?.projectId) || store.data.projects[0];
+        if (!project) throw new HttpError(400, 'No project to review');
+        const day = /^\d{4}-\d{2}-\d{2}$/.test(body?.day || '') ? body.day : dayOf(Date.now() - 864e5);
+        return lessons.review(project, day);
+      }
+      if (method === 'PATCH' && rid) {
+        const l = store.data.lessons.find((x) => x.id === rid || x.ref === String(rid).toUpperCase());
+        if (!l) throw new HttpError(404, 'No such lesson');
+        if (body?.status && !['rule', 'watching', 'archived', 'revoked'].includes(body.status)) throw new HttpError(400, 'Unknown status');
+        for (const k of ['status', 'rule', 'why']) if (typeof body?.[k] === 'string' && body[k].trim()) l[k] = body[k].trim().slice(0, 400);
+        l.updatedAt = now();
+        store.changed();
+        return l;
+      }
+    }
     if (method === 'GET' && res === 'retro') return retroStats(store.data, Math.max(1, Math.min(90, Number(url.searchParams.get('days')) || 7)));
     if (method === 'GET' && res === 'check-path') {
       const dir = url.searchParams.get('path') || '';
@@ -732,7 +770,7 @@ export function createApp({ dataDir } = {}) {
     awake.close();
     store.flush();
   });
-  return { server, store, runner, chief, lead, watch, update, awake, feishu, delivery, previews, workers, rules, autopilot };
+  return { server, store, runner, chief, lead, watch, update, awake, feishu, delivery, previews, workers, rules, autopilot, lessons };
 }
 
 export function startServer({ port = Number(process.env.PORT) || 4747, host = '127.0.0.1', dataDir } = {}) {
